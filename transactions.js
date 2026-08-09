@@ -26,13 +26,16 @@ const TransactionsModule = (() => {
     let allTransactions = [];
 
     // Rótulos legíveis para o campo `categorias.grupo` (essencial |
-    // estilo_de_vida | investimento | renda) — a tabela antiga
-    // (plano_de_contas) tinha um campo livre `macro_grupo`; a tabela
-    // correta (categorias) usa um enum fixo, por isso o mapeamento.
+    // estilo_de_vida | investimento | divida | transferencia | renda)
+    // — a tabela antiga (plano_de_contas) tinha um campo livre
+    // `macro_grupo`; a tabela correta (categorias) usa um enum fixo,
+    // por isso o mapeamento.
     const GRUPO_LABEL = {
         essencial:      'Essencial',
         estilo_de_vida: 'Estilo de Vida',
         investimento:   'Investimento',
+        divida:         'Dívida/Financiamento',
+        transferencia:  'Transferência Interna',
         renda:          'Renda'
     };
 

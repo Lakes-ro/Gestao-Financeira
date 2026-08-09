@@ -10,9 +10,27 @@
  *     ver migração 'categorias_multi_tenant_cliente_id').
  *
  * O cliente só informa Nome + Tipo (Receita/Despesa). O campo
- * `grupo` (essencial/estilo_de_vida/investimento/renda), que o BI
- * exige, é decidido por um classificador — o cliente NÃO escolhe
- * isso, e não precisa entender essa taxonomia interna.
+ * `grupo` (essencial/estilo_de_vida/investimento/divida/transferencia/
+ * renda), que o BI exige, é decidido por um classificador — o cliente
+ * NÃO escolhe isso, e não precisa entender essa taxonomia interna.
+ *
+ * ⚠️ BUG CORRIGIDO — O CLASSIFICADOR NÃO PODE FORÇAR O TIPO:
+ * A versão anterior, quando a heurística discordava do Tipo escolhido
+ * pelo cliente (ex: cliente criando "Aluguel" e marcando Receita,
+ * porque ele RECEBE aluguel de um imóvel, não paga), SOBRESCREVIA
+ * silenciosamente para Despesa antes de salvar — o cliente via um
+ * aviso, mas não tinha como confirmar que a escolha dele estava
+ * certa mesmo. Isso viola a regra do próprio sistema ("a IA sugere,
+ * nunca impõe"), que já era respeitada em todo o resto do app (Smart
+ * Input, Aprendizado de Categorias) menos aqui.
+ *
+ * AGORA: a sugestão é só uma MENSAGEM. O <select> de Tipo nunca é
+ * alterado por código — o cliente pode mudar de ideia depois de ver o
+ * aviso, ou simplesmente ignorá-lo e confirmar do jeito que escolheu.
+ * `handleConfirmarNovaCategoria()` sempre lê o valor ATUAL do select
+ * no momento de salvar (nunca um valor "decidido" antes), e escolhe um
+ * grupo compatível com esse tipo final — nunca grava uma combinação
+ * inconsistente (ex: tipo=despesa com grupo='renda').
  *
  * ⚠️ SOBRE A "IA" — LEIA ANTES DE ACHAR QUE ISSO É ENROLAÇÃO:
  * `classificarCategoriaComIA()` abaixo é uma SIMULAÇÃO — um
@@ -37,6 +55,13 @@
 // ── Base de palavras-chave do classificador simulado ──────────
 // Cada entrada: [regex sobre o nome, grupo do BI, tipo esperado].
 // A primeira regra que bater no nome digitado vence.
+//
+// ATUALIZAÇÃO — 'divida' e 'transferencia': "financiamento" e
+// "empréstimo" saíram de 'essencial' — pagar uma dívida não é a mesma
+// coisa que sobrevivência (aluguel, mercado, etc.), e misturar os dois
+// distorce o Custo de Sobrevivência no BI. "Cartão de crédito/fatura"
+// segue o mesmo grupo. "Transferência entre contas" é tratado como
+// neutro (não conta nem como receita nem como despesa no dashboard).
 const REGRAS_CLASSIFICACAO_CATEGORIA = [
     // Renda
     [/sal[aá]rio|holerite|pr[oó]-labore/i,                       'renda',          'receita'],
@@ -44,11 +69,18 @@ const REGRAS_CLASSIFICACAO_CATEGORIA = [
     [/dividendo|jcp|rendimento/i,                                  'renda',          'receita'],
     [/renda extra|extra/i,                                         'renda',          'receita'],
 
+    // Transferência interna (neutro — não conta como receita/despesa)
+    [/transfer[eê]ncia entre contas|transfer[eê]ncia interna|entre contas|pix para mim mesmo/i, 'transferencia', 'despesa'],
+
+    // Dívidas e Financiamentos (isolado de essencial/estilo de vida)
+    [/financiamento|empr[eé]stimo|parcelamento da d[ií]vida|renegocia[çc][ãa]o/i, 'divida', 'despesa'],
+    [/fatura|cart[aã]o de cr[eé]dito/i,                            'divida',         'despesa'],
+
     // Investimento (poupança/aportes — nem essencial nem estilo de vida)
     [/investimento|aporte|previd[eê]ncia|reserva|poupan[çc]a/i,   'investimento',   'despesa'],
 
     // Essencial (sobrevivência)
-    [/luz|energia|[aá]gua|g[aá]s\b|condom[ií]nio|aluguel|financiamento|iptu/i, 'essencial', 'despesa'],
+    [/luz|energia|[aá]gua|g[aá]s\b|condom[ií]nio|aluguel|iptu/i,  'essencial',      'despesa'],
     [/mercado|supermercado|feira|a[çc]ougue/i,                     'essencial',      'despesa'],
     [/farm[aá]cia|m[eé]dico|consulta|plano de sa[uú]de|hospital/i, 'essencial',      'despesa'],
     [/escola|faculdade|curso|mensalidade/i,                        'essencial',      'despesa'],
@@ -64,9 +96,12 @@ const REGRAS_CLASSIFICACAO_CATEGORIA = [
 /**
  * Classifica uma categoria a partir do nome (heurística — ver nota
  * de segurança no topo do arquivo). Retorna:
- *   { tipo, grupo, corrigido, motivo }
- * `corrigido` é true quando o tipo sugerido difere do que o cliente
- * escolheu (ex: cliente marcou "Salário" como despesa por engano).
+ *   { tipoSugerido, grupoParaTipoSugerido, corrigido, motivo }
+ * `corrigido` é true quando o tipo que a heurística reconheceria
+ * difere do que o cliente JÁ escolheu no momento da análise — mas
+ * isso NUNCA altera o campo automaticamente, é só informativo (ver
+ * handleConfirmarNovaCategoria, que sempre respeita a escolha final
+ * do cliente no momento de salvar).
  */
 async function classificarCategoriaComIA(nome, tipoInformado) {
     // Simula a latência de uma chamada de rede real — remover
@@ -80,23 +115,23 @@ async function classificarCategoriaComIA(nome, tipoInformado) {
         // usa o grupo mais neutro possível para esse tipo.
         const grupoPadrao = tipoInformado === 'receita' ? 'renda' : 'estilo_de_vida';
         return {
-            tipo: tipoInformado,
-            grupo: grupoPadrao,
+            tipoSugerido: tipoInformado,
+            grupoParaTipoSugerido: grupoPadrao,
             corrigido: false,
-            motivo: 'Não reconheci essa categoria — mantive o tipo que você escolheu e usei um grupo padrão.'
+            motivo: 'Não consegui identificar automaticamente essa categoria, mas não tem problema — ela foi criada exatamente do jeito que você escolheu e já pode ser usada normalmente.'
         };
     }
 
-    const [, grupo, tipoEsperado] = regra;
-    const corrigido = tipoEsperado !== tipoInformado;
+    const [, grupoSugerido, tipoSugerido] = regra;
+    const corrigido = tipoSugerido !== tipoInformado;
 
     return {
-        tipo: tipoEsperado,
-        grupo,
+        tipoSugerido,
+        grupoParaTipoSugerido: grupoSugerido,
         corrigido,
         motivo: corrigido
-            ? `"${nome}" parece ser ${tipoEsperado === 'receita' ? 'uma receita' : 'uma despesa'}, não ${tipoInformado === 'receita' ? 'uma receita' : 'uma despesa'} — corrigi automaticamente.`
-            : `Categoria classificada como ${tipoEsperado === 'receita' ? 'receita' : 'despesa'}.`
+            ? `"${nome}" normalmente é ${tipoSugerido === 'receita' ? 'uma receita (dinheiro que entra)' : 'uma despesa (dinheiro que sai)'}. Se for esse o seu caso, mude a opção "Tipo" acima antes de confirmar — mas se você tem certeza que é ${tipoInformado === 'receita' ? 'uma receita' : 'uma despesa'} mesmo (ex: você RECEBE aluguel, em vez de pagar), pode deixar como está e confirmar do mesmo jeito.`
+            : `Tudo certo! "${nome}" foi reconhecida como ${tipoSugerido === 'receita' ? 'uma receita' : 'uma despesa'}.`
     };
 }
 
@@ -105,7 +140,11 @@ let sugestaoIACategoria = null;
 
 function abrirModalNovaCategoria() {
     document.getElementById('novaCategoriaNome').value = '';
-    document.getElementById('novaCategoriaTipo').value = 'despesa';
+    // Default alinhado com a ordem visual das opções (Receita
+    // primeiro) — antes abria em 'despesa', o que confundia porque a
+    // caixa já mostrava "Receita" selecionada visualmente sem
+    // realmente estar.
+    document.getElementById('novaCategoriaTipo').value = 'receita';
     sugestaoIACategoria = null;
 
     const sugestaoEl = document.getElementById('novaCategoriaSugestao');
@@ -129,6 +168,9 @@ async function handleClassificarNovaCategoria() {
     btn.textContent = 'Analisando...';
 
     try {
+        // IMPORTANTE: isto NÃO altera document.getElementById('novaCategoriaTipo').value —
+        // só guarda a sugestão para consulta posterior. O cliente continua
+        // 100% livre para mudar o Tipo manualmente antes de confirmar.
         sugestaoIACategoria = await classificarCategoriaComIA(nome, tipoInformado);
 
         const sugestaoEl = document.getElementById('novaCategoriaSugestao');
@@ -154,6 +196,21 @@ async function handleConfirmarNovaCategoria() {
 
     if (!nome || !clientId) { UIModule.showError('Não foi possível identificar a categoria ou o cliente.'); return; }
 
+    // Lê o tipo ATUAL do select — não o que a heurística sugeriu. Se o
+    // cliente viu o aviso "isso parece ser uma despesa" e mesmo assim
+    // manteve/confirmou Receita (ex: aluguel recebido, não pago), é
+    // essa escolha final que vale, sempre.
+    const tipoFinal = document.getElementById('novaCategoriaTipo').value;
+
+    // Grupo: usa o sugerido pela heurística se o tipo final bater com
+    // o que ela detectou; senão cai num grupo neutro e válido para o
+    // tipo que o cliente realmente escolheu — nunca grava uma
+    // combinação inconsistente (ex: tipo=receita com grupo='essencial',
+    // que não existe/não faz sentido).
+    const grupoFinal = (tipoFinal === sugestaoIACategoria.tipoSugerido)
+        ? sugestaoIACategoria.grupoParaTipoSugerido
+        : (tipoFinal === 'receita' ? 'renda' : 'estilo_de_vida');
+
     const btn = document.getElementById('btnConfirmarCategoria');
     btn.disabled = true;
     btn.textContent = 'Salvando...';
@@ -161,16 +218,30 @@ async function handleConfirmarNovaCategoria() {
     try {
         const { error } = await supabaseClient.from('categorias').insert({
             nome,
-            tipo:       sugestaoIACategoria.tipo,
-            grupo:      sugestaoIACategoria.grupo,
-            cliente_id: clientId
+            tipo:       tipoFinal,
+            grupo:      grupoFinal,
+            cliente_id: clientId,
+            revisado:   false // toda categoria criada pelo CLIENTE nasce pendente — o admin confirma/corrige o grupo depois (ver "Pendentes de Contabilização" em Categorias, admin.html)
         });
 
         if (error) throw error;
 
-        UIModule.showSuccess('Categoria criada!');
+        UIModule.showSuccess('Categoria criada! O administrador vai revisar a classificação dela em breve.');
         UIModule.closeModal('modalNovaCategoria');
-        await populateCategorySelect(); // recarrega o <select>, já incluindo a categoria nova
+
+        // Recarrega o dropdown do formulário principal de "Registar
+        // Transação", já incluindo a categoria nova.
+        await populateCategorySelect();
+
+        // Se a Importação de Extrato estiver aberta com uma tabela de
+        // revisão na tela, atualiza os <select> de categoria de cada
+        // linha também — sem isso, a categoria recém-criada só
+        // apareceria depois de reprocessar o arquivo do zero. Guarda
+        // por `typeof` porque este arquivo não depende de
+        // importacao-extrato.js estar carregado.
+        if (typeof atualizarCategoriasNaTabelaImportacao === 'function') {
+            await atualizarCategoriasNaTabelaImportacao();
+        }
     } catch (err) {
         console.error('❌ handleConfirmarNovaCategoria:', err.message);
         UIModule.showError('Erro ao salvar categoria: ' + err.message);

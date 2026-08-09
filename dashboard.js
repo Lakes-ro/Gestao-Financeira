@@ -17,6 +17,19 @@
  * UI possa exibir com clareza "Saldo Disponível" já descontando o que
  * está protegido em metas/investimentos — sem subtrair esse valor
  * DUAS vezes (ele já está dentro de totalDespesas).
+ *
+ * ATUALIZAÇÃO — GRUPOS 'divida' E 'transferencia':
+ *   - 'divida' (Dívidas e Financiamentos): despesa real, dinheiro que
+ *     sai de verdade do controle da pessoa — continua contando em
+ *     totalDespesas/saldo normalmente. A diferença é só de EXIBIÇÃO:
+ *     ganha um bucket próprio (custoDivida), isolado de
+ *     custoDeSobrevivencia/custoDeVida, para não distorcer essas duas
+ *     métricas com pagamento de empréstimo/financiamento.
+ *   - 'transferencia' (Transferências Internas): dinheiro que só MUDOU
+ *     DE LUGAR entre contas da mesma pessoa — não é receita nem
+ *     despesa de verdade. Fica de FORA do totalReceitas/totalDespesas/
+ *     saldoDisponivel por completo (soma à parte, em
+ *     totalTransferencias, só para efeito informativo).
  */
 
 const DashboardModule = (() => {
@@ -26,11 +39,13 @@ const DashboardModule = (() => {
         const metrics = {
             custoDeSobrevivencia: 0,
             custoDeVida:          0,
+            custoDivida:          0, // categorias.grupo === 'divida' — empréstimos/financiamentos, isolado
             aportesInvestimento:  0, // categorias.grupo === 'investimento' — dinheiro já protegido/alocado
+            totalTransferencias:  0, // categorias.grupo === 'transferencia' — NÃO entra em receita/despesa/saldo
             rendaPassiva:         0, // categorias não distingue ativa/passiva hoje — fica sempre 0 (ver nota abaixo)
             rendaAtiva:           0,
             totalReceitas:        0,
-            totalDespesas:        0, // essencial + estilo_de_vida + investimento (todas as despesas, sem exceção)
+            totalDespesas:        0, // essencial + estilo_de_vida + investimento + divida (transferencia NUNCA entra aqui)
             saldo:                0, // ALIAS de saldoDisponivel — mantido para não quebrar quem já lê `.saldo`
             saldoDisponivel:      0, // = totalReceitas - totalDespesas (já exclui o alocado, pois investimento é uma despesa)
             totalAlocado:         0, // ALIAS de aportesInvestimento — nome explícito p/ exibição no dashboard
@@ -46,28 +61,40 @@ const DashboardModule = (() => {
         // que exista uma forma de marcar isso em `categorias`.
         transactions.forEach(t => {
             const valor = parseFloat(t.valor || 0);
+            const grupo = t.categorias?.grupo;
+
+            // Transferência interna: dinheiro só mudou de lugar — não é
+            // receita nem despesa de verdade. Registrada à parte, fora
+            // do cálculo de saldo, para não inflar nem distorcer nada
+            // (independe do tipo ser 'receita' ou 'despesa').
+            if (grupo === 'transferencia') {
+                metrics.totalTransferencias += valor;
+                return;
+            }
 
             if (t.tipo === 'receita') {
                 metrics.totalReceitas += valor;
                 metrics.rendaAtiva    += valor;
             } else {
                 metrics.totalDespesas += valor;
-                const grupo = t.categorias?.grupo;
                 if (grupo === 'essencial') {
                     metrics.custoDeSobrevivencia += valor;
                 } else if (grupo === 'investimento') {
                     metrics.aportesInvestimento += valor;
+                } else if (grupo === 'divida') {
+                    metrics.custoDivida += valor;
                 } else {
                     metrics.custoDeVida += valor;
                 }
             }
         });
 
-        // saldoDisponivel = tudo que entrou menos tudo que saiu. Como
-        // 'investimento' já é uma despesa somada em totalDespesas, o
-        // dinheiro alocado em metas/caixinhas JÁ está excluído aqui —
-        // não subtraímos aportesInvestimento de novo (isso duplicaria
-        // o desconto e mostraria um saldo menor do que o real).
+        // saldoDisponivel = tudo que entrou menos tudo que saiu (fora
+        // transferências, que não passam por aqui — ver return acima).
+        // Como 'investimento' e 'divida' já são despesas somadas em
+        // totalDespesas, o dinheiro alocado em metas/caixinhas e o
+        // pagamento de dívidas JÁ estão excluídos aqui — não subtraímos
+        // de novo (isso duplicaria o desconto).
         metrics.saldoDisponivel = metrics.totalReceitas - metrics.totalDespesas;
         metrics.saldo           = metrics.saldoDisponivel; // alias retrocompatível
         metrics.totalAlocado    = metrics.aportesInvestimento; // alias com nome explícito
@@ -83,7 +110,7 @@ const DashboardModule = (() => {
         const breakdown = {};
 
         transactions
-            .filter(t => t.tipo === 'despesa')
+            .filter(t => t.tipo === 'despesa' && t.categorias?.grupo !== 'transferencia')
             .forEach(t => {
                 const category = t.categorias?.nome || 'Sem Categoria';
                 breakdown[category] = (breakdown[category] || 0) + parseFloat(t.valor || 0);
@@ -131,6 +158,7 @@ const DashboardModule = (() => {
                 UIModule.setText('biSurvivalCost', `R$ ${m.custoDeSobrevivencia.toFixed(2)}`);
                 UIModule.setText('biLifestyleCost', `R$ ${m.custoDeVida.toFixed(2)}`);
                 UIModule.setText('biInvestments', `R$ ${m.aportesInvestimento.toFixed(2)}`);
+                UIModule.setText('biDebt', `R$ ${m.custoDivida.toFixed(2)}`);
                 UIModule.setText('biPassiveIncome', `R$ ${m.rendaPassiva.toFixed(2)}`);
                 UIModule.setText('biCoverage', `${m.cobertura.toFixed(1)}%`);
 

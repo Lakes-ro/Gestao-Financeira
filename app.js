@@ -1149,6 +1149,8 @@ const GRUPO_LABEL_SELECT = {
     essencial:      '🟠 Essenciais',
     estilo_de_vida: '🎯 Estilo de Vida',
     investimento:   '💰 Investimentos',
+    divida:         '💳 Dívidas e Financiamentos',
+    transferencia:  '🔄 Transferências Internas',
     renda:          '📈 Renda'
 };
 
@@ -1191,7 +1193,7 @@ function setCategorySelectState(state, categorias = []) {
 // despesas do dia a dia. O campo `tipo` (receita/despesa) nunca
 // aparece no texto — é só metadado interno que o sistema usa
 // sozinho (ex: no dashboard, no saldo).
-const ORDEM_GRUPOS = ['essencial', 'estilo_de_vida', 'investimento', 'renda'];
+const ORDEM_GRUPOS = ['essencial', 'estilo_de_vida', 'investimento', 'divida', 'transferencia', 'renda'];
 
 function montarPainelAgrupado(categorias) {
     const porGrupo = {};

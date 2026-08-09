@@ -2,50 +2,45 @@
    GESTOR FINANCEIRO PRO — admin.css
    Design System Darktech — Painel do Administrador
    CSS Variables definidas aqui. Mobile: sidebar → bottom navbar.
+
+   ATUALIZAÇÃO — PILLS DE PERÍODO (Razonete): .razonete-periodo-pills
+   e .razonete-periodo-pill, filtro rápido de período (Hoje/Ontem/
+   7 dias/Este mês/Mês passado/Tudo) acima dos filtros de Cliente/Tipo.
    ============================================================ */
 
 /* ── Variáveis do Design System ─────────────────────────────── */
 :root {
-  /* Backgrounds */
   --bg-root:        #060d0a;
   --bg-surface:     #0a120e;
   --bg-card:        #0f1a14;
   --bg-input:       #0d1610;
   --bg-input-focus: #121e16;
 
-  /* Bordas */
   --border-default: rgba(0, 200, 120, 0.12);
   --border-focus:   rgba(0, 245, 160, 0.45);
 
-  /* Acentos */
   --accent-primary: #00f5a0;
   --accent-glow:    rgba(0, 245, 160, 0.12);
   --accent-warning: #ffb443;
   --accent-danger:  #ff4d6d;
 
-  /* Texto */
   --text-primary:   #e8eaf6;
   --text-secondary: #6b9e84;
   --text-muted:     #3d6352;
 
-  /* Tipografia */
   --font-body: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   --font-mono: 'Courier New', monospace;
 
-  /* Bordas arredondadas */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  /* Transição */
   --transition: 0.2s ease;
 
-  /* Dimensões de layout */
   --sidebar-w:  200px;
   --navbar-h:   64px;
 }
 
-/* ── Reset base ─────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 .app-body {
@@ -258,11 +253,6 @@
 .card-name { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
 .card-sub  { font-size: 0.8rem; color: var(--text-secondary); }
 
-/* ── Card header row (nome/email de um lado, conteúdo do outro) ──
-   Usado por clientes.js (nome do cliente) e dashboards.js (nome do
-   cliente + selo de risco). Substitui o antigo .card-link-row, que
-   ficou sem uso depois que o link individual do cliente foi
-   removido a pedido. */
 .card-header-row {
   display: flex;
   justify-content: space-between;
@@ -270,10 +260,6 @@
   gap: 0.75rem;
 }
 
-/* ── Selo de risco (dashboards.js) ────────────────────────────
-   Classificação de risco financeiro do cliente, calculada a partir
-   do saldo e da cobertura de renda passiva. Mostrado direto no card
-   da grid "Dashboards", sem precisar abrir o dashboard individual. */
 .risk-badge {
   display: inline-flex;
   align-items: center;
@@ -340,6 +326,19 @@
 .btn-card.deletar:hover { background: rgba(255,77,109,0.22); }
 .btn-card.ver-dashboard { background: rgba(66,99,235,0.12);  border-color: rgba(66,99,235,0.25); color: #7b96ff; }
 .btn-card.ver-dashboard:hover { background: rgba(66,99,235,0.22); }
+.btn-card.confirmar     { background: rgba(0,245,160,0.14);  border-color: rgba(0,245,160,0.35);  color: var(--accent-primary); }
+.btn-card.confirmar:hover { background: rgba(0,245,160,0.26); }
+
+/* Card de categoria PENDENTE DE CONTABILIZAÇÃO — borda âmbar pra
+   chamar atenção visualmente, distinguindo de um card comum. */
+.card--pendente {
+  border-color: rgba(255, 180, 67, 0.35);
+  background: linear-gradient(180deg, rgba(255, 180, 67, 0.05), var(--bg-card) 60%);
+}
+
+.card--pendente:hover {
+  border-color: rgba(255, 180, 67, 0.55);
+}
 
 /* ── Metas ───────────────────────────────────────────────────── */
 .meta-cliente-badge {
@@ -424,6 +423,38 @@
 }
 
 /* ── Razonete ────────────────────────────────────────────────── */
+
+.razonete-periodo-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.razonete-periodo-pill {
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.razonete-periodo-pill:hover {
+  border-color: rgba(0, 245, 160, 0.3);
+  color: var(--text-primary);
+}
+
+.razonete-periodo-pill.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #060e09;
+}
+
 .razonete-filters {
   display: flex;
   gap: 1.5rem;
@@ -465,6 +496,7 @@
 }
 
 .filter-group select:focus { border-color: var(--border-focus); }
+.filter-group input:focus { border-color: var(--border-focus); }
 
 .razonete-list {
   display: flex;
@@ -573,7 +605,6 @@
   flex-shrink: 0;
 }
 
-/* Inputs de modal */
 .form-group { display: flex; flex-direction: column; gap: 0.35rem; }
 
 .modal-body .form-group label {
@@ -607,7 +638,6 @@
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* Botões modais */
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--border-default);
@@ -867,7 +897,6 @@
 
 @media (max-width: 768px) {
 
-  /* ── Sidebar vira bottom navbar ─────────────────────────── */
   .sidebar {
     position: fixed;
     bottom: 0;
@@ -890,10 +919,8 @@
     z-index: 9999;
   }
 
-  /* Esconde elementos apenas desktop */
   .sidebar-brand { display: none; }
 
-  /* sidebar-top: expande para ocupar a nav toda */
   .sidebar-top {
     flex-direction: row;
     flex: 1;
@@ -901,7 +928,6 @@
     gap: 0;
   }
 
-  /* Nav: linha horizontal de ícones */
   .sidebar-nav {
     flex-direction: row;
     align-items: center;
@@ -911,7 +937,6 @@
     gap: 0;
   }
 
-  /* Cada botão: ícone grande + label minúsculo */
   .nav-item {
     flex-direction: column;
     align-items: center;
@@ -937,7 +962,6 @@
     color: var(--accent-primary);
   }
 
-  /* Ativo: verde + ponto indicador */
   .nav-item.active {
     color: var(--accent-primary);
     background: transparent;
@@ -958,14 +982,12 @@
     box-shadow: 0 0 8px rgba(0, 245, 160, 0.7);
   }
 
-  /* Emoji maior que o texto label */
   .nav-icon {
     font-size: 19px;
     width: auto;
     text-align: center;
   }
 
-  /* sidebar-bottom: à direita, compacto */
   .sidebar-bottom {
     flex-direction: row;
     align-items: center;
@@ -976,7 +998,6 @@
     flex: 0 0 auto;
   }
 
-  /* Botão Perfil: só ícone */
   .nav-item[data-section="perfil"] {
     width: 38px;
     flex: 0 0 38px;
@@ -988,7 +1009,6 @@
     gap: 2px;
   }
 
-  /* Botão Sair compacto */
   .btn-sair {
     width: auto;
     padding: 6px 10px;
@@ -997,7 +1017,6 @@
     border-radius: 6px;
   }
 
-  /* ── Main content: espaço para a navbar ─────────────────── */
   .main-content {
     margin-left: 0;
     padding: 1.25rem 1rem calc(var(--navbar-h) + 1rem);
@@ -1006,7 +1025,6 @@
     overflow-y: auto;
   }
 
-  /* ── Ajustes de componentes ──────────────────────────────── */
   .kpi-grid    { grid-template-columns: repeat(2, 1fr); }
   .charts-row  { grid-template-columns: 1fr; }
   .cards-grid  { grid-template-columns: 1fr; }
@@ -1014,6 +1032,13 @@
   .planejamento-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .razonete-periodo-pills { gap: 0.4rem; }
+
+  .razonete-periodo-pill {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.75rem;
   }
 
   .razonete-filters {
