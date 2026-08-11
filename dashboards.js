@@ -1,3 +1,32 @@
+/**
+ * DASHBOARDS.JS — Módulo: Dashboards dos Clientes (admin.html)
+ * Padrão: script global. Sem import/export.
+ * Depende de: supabaseClient, allClientes, loadAllClientes,
+ *             openModal, showToast, formatCurrency (admin.js)
+ *
+ * MIGRAÇÃO DE SCHEMA (auditoria via Supabase MCP — confirmado ao
+ * vivo no banco, não suposição): todo este módulo usava
+ * `plano_de_contas`, mas essa tabela tem RLS que só libera leitura
+ * para o admin dono do `client_id` referenciado — e nunca tinha
+ * sido populada. A tabela correta, com RLS liberado para leitura
+ * autenticada e já populada com 18 categorias reais, é `categorias`
+ * (colunas: nome, tipo, grupo — onde grupo ∈ {essencial,
+ * estilo_de_vida, investimento, renda}).
+ *
+ * ISSO MUDA UMA REGRA DE NEGÓCIO: `categorias` não distingue renda
+ * ativa de passiva (só existe o valor 'renda' para receitas) — o
+ * antigo `plano_de_contas.tipo_renda` não tem equivalente aqui. Por
+ * isso a classificação de risco, que dependia da cobertura de renda
+ * passiva, foi REESCRITA para usar saldo + taxa de poupança (ambos
+ * calculáveis com os dados reais que existem hoje). Se no futuro
+ * `categorias` ganhar uma forma de marcar renda passiva, dá para
+ * reintroduzir a cobertura como critério adicional.
+ *
+ * NOVO bucket 'investimento' (aportes/reserva/previdência) não
+ * existia no modelo antigo — agora aparece como métrica própria,
+ * nem essencial nem estilo de vida.
+ */
+
 let chartDonut = null;
 let chartBar   = null;
 
@@ -8,6 +37,7 @@ function initDashboards() {
   renderDashboards();
 }
 
+// ── Renderiza grid com selo de risco ──────────────────────────
 async function renderDashboards() {
   const grid = document.getElementById('dashboards-grid');
   if (!grid) return;
@@ -48,6 +78,7 @@ async function renderDashboards() {
   });
 }
 
+// ── Cálculo de risco por cliente (query única, em lote) ───────
 async function calcularRiscosPorCliente(clienteIds) {
   const riscos = {};
   clienteIds.forEach(id => { riscos[id] = classificarRisco([]); });
@@ -77,18 +108,23 @@ async function calcularRiscosPorCliente(clienteIds) {
   return riscos;
 }
 
+/**
+ * Regra de classificação de risco (critério de negócio nosso, não
+ * vem do banco; ajustável a qualquer momento se quiser outro corte):
+ *
+ *  🔴 Risco Alto → saldo (receita - despesa) negativo
+ *  🟡 Atenção    → saldo positivo, mas taxa de poupança < 10%
+ *  🟢 Saudável   → saldo positivo e taxa de poupança >= 10%
+ *  ⚪ Sem dados  → cliente ainda sem transações lançadas
+ */
 function classificarRisco(transacoes) {
-  // Transferências internas não são receita nem despesa de verdade —
-  // excluídas antes de qualquer cálculo (mesma regra do resto do app).
-  const semTransferencias = transacoes.filter(t => t.categorias?.grupo !== 'transferencia');
-
-  if (!semTransferencias.length) {
+  if (!transacoes.length) {
     return { classe: 'cinza', emoji: '⚪', label: 'Sem dados' };
   }
 
   let totalReceita = 0, totalDespesa = 0;
 
-  semTransferencias.forEach(t => {
+  transacoes.forEach(t => {
     const valor = Math.abs(parseFloat(t.valor) || 0);
     if (t.tipo === 'receita') totalReceita += valor;
     else                      totalDespesa += valor;
@@ -102,6 +138,7 @@ function classificarRisco(transacoes) {
   return                          { classe: 'verde',    emoji: '🟢', label: 'Saudável'   };
 }
 
+// ── Modal: dashboard individual do cliente ────────────────────
 async function abrirDashboard(clienteId, nome) {
   document.getElementById('modal-dashboard-title').textContent = `📊 Dashboard: ${nome}`;
   ['kpi-sobrevivencia','kpi-estilo','kpi-investimentos','kpi-poupanca'].forEach(id => {
@@ -124,14 +161,8 @@ async function abrirDashboard(clienteId, nome) {
 }
 
 function calcularEExibir(transacoes) {
-  // Transferências internas (grupo 'transferencia') não são receita
-  // nem despesa de verdade — dinheiro só mudou de lugar. Filtradas
-  // FORA antes de qualquer cálculo, para não inflar nem distorcer
-  // nenhuma métrica abaixo (mesma regra do dashboard.js do cliente).
-  const semTransferencias = transacoes.filter(t => t.categorias?.grupo !== 'transferencia');
-
-  const receitas = semTransferencias.filter(t => t.tipo === 'receita');
-  const despesas = semTransferencias.filter(t => t.tipo === 'despesa');
+  const receitas = transacoes.filter(t => t.tipo === 'receita');
+  const despesas = transacoes.filter(t => t.tipo === 'despesa');
 
   const totalReceita = receitas.reduce((s, t) => s + Math.abs(t.valor), 0);
   const totalDespesa = despesas.reduce((s, t) => s + Math.abs(t.valor), 0);
@@ -144,21 +175,13 @@ function calcularEExibir(transacoes) {
     .filter(t => t.categorias?.grupo === 'investimento')
     .reduce((s, t) => s + Math.abs(t.valor), 0);
 
-  // Dívidas e Financiamentos: isolado do Custo Essencial e do Estilo
-  // de Vida — pagar um empréstimo não é a mesma coisa que sobrevivência
-  // nem lazer, e misturar os dois distorce as duas métricas.
-  const custoDivida = despesas
-    .filter(t => t.categorias?.grupo === 'divida')
-    .reduce((s, t) => s + Math.abs(t.valor), 0);
-
-  const estiloDeVida = Math.max(0, totalDespesa - custoSobrevivencia - aportesInvestimento - custoDivida);
+  const estiloDeVida = Math.max(0, totalDespesa - custoSobrevivencia - aportesInvestimento);
   const saldo        = totalReceita - totalDespesa;
   const taxaPoupanca  = totalReceita > 0 ? Math.max(0, (saldo / totalReceita) * 100) : 0;
 
   document.getElementById('kpi-sobrevivencia').textContent  = formatCurrency(custoSobrevivencia);
   document.getElementById('kpi-estilo').textContent         = formatCurrency(estiloDeVida);
   document.getElementById('kpi-investimentos').textContent  = formatCurrency(aportesInvestimento);
-  document.getElementById('kpi-dividas').textContent         = formatCurrency(custoDivida);
   document.getElementById('kpi-poupanca').textContent       = taxaPoupanca.toFixed(1) + '%';
 
   renderDonut(custoSobrevivencia, estiloDeVida, aportesInvestimento);
@@ -171,7 +194,7 @@ function calcularEExibir(transacoes) {
   const topCats = Object.entries(categoriaMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
   renderBarChart(topCats);
 
-  renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, custoDivida, semTransferencias.length);
+  renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, transacoes.length);
 }
 
 function renderDonut(essencial, estiloVida, investimento) {
@@ -218,7 +241,7 @@ function renderBarChart(topCats) {
   });
 }
 
-function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, custoDivida, totalTransacoes) {
+function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, totalTransacoes) {
   const grid = document.getElementById('analise-grid');
   if (!grid) return;
   const saldo        = totalReceita - totalDespesa;
@@ -229,7 +252,6 @@ function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeV
     { label: 'Custo Essencial',   value: formatCurrency(custoSobrevivencia),  color: '#f5d623' },
     { label: 'Estilo de Vida',    value: formatCurrency(estiloDeVida),        color: '#ff6384' },
     { label: 'Investimentos',     value: formatCurrency(aportesInvestimento), color: '#00f5a0' },
-    { label: 'Dívidas',           value: formatCurrency(custoDivida),         color: '#ff9f40' },
     { label: 'Despesa Total',     value: formatCurrency(totalDespesa),        color: '#ff4d6d' },
     { label: 'Saldo',             value: formatCurrency(saldo),               color: saldo >= 0 ? '#00f5a0' : '#ff4d6d' },
     { label: 'Taxa de Poupança',  value: taxaEconomia + '%',                  color: '#7b96ff' },

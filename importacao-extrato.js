@@ -53,8 +53,6 @@ const GRUPO_LABEL_IMPORTACAO = {
     essencial:      '🟠 Essencial',
     estilo_de_vida: '🎯 Estilo de Vida',
     investimento:   '💰 Investimento',
-    divida:         '💳 Dívida/Financiamento',
-    transferencia:  '🔄 Transferência Interna',
     renda:          '📈 Renda'
 };
 
@@ -426,10 +424,7 @@ function montarOpcoesCategoriaImportacao(categoriaSelecionadaId) {
         porGrupo[chave].push(c);
     });
 
-    const ordemGrupos = [
-        'despesa__essencial', 'despesa__estilo_de_vida', 'despesa__investimento',
-        'despesa__divida', 'despesa__transferencia', 'receita__renda', 'receita__transferencia'
-    ];
+    const ordemGrupos = ['despesa__essencial', 'despesa__estilo_de_vida', 'despesa__investimento', 'receita__renda'];
     const chaves = [...ordemGrupos.filter(k => porGrupo[k]), ...Object.keys(porGrupo).filter(k => !ordemGrupos.includes(k))];
 
     let html = '<option value="">Selecione...</option>';
@@ -522,33 +517,6 @@ function ligarEventosLinhasImportacao() {
         tr.querySelector('.import-select-categoria')?.addEventListener('change', (e) => {
             linha.categoriaId = e.target.value || null;
         });
-    });
-}
-
-/**
- * Re-carrega o cache de categorias (agora incluindo qualquer categoria
- * nova criada pelo cliente) e reconstrói o <select> de categoria de
- * CADA linha já renderizada na tabela de revisão — sem perder a linha
- * nem a seleção atual de quem já tinha escolhido uma categoria.
- *
- * Chamada por categoria-personalizada.js logo após salvar uma nova
- * categoria (ver botão "+ Criar categoria personalizada" abaixo da
- * tabela de revisão) — sem isso, a categoria recém-criada só
- * apareceria depois de reprocessar o arquivo inteiro do zero.
- */
-async function atualizarCategoriasNaTabelaImportacao() {
-    if (!linhasImportacao.length) return; // tabela não está aberta — nada a atualizar
-
-    categoriasCacheImportacao = await DatabaseModule.getCategorias();
-
-    document.querySelectorAll('#importReviewTableBody tr').forEach(tr => {
-        const idTemp = tr.dataset.idTemp;
-        const linha  = linhasImportacao.find(l => l.idTemp === idTemp);
-        if (!linha) return;
-
-        const select = tr.querySelector('.import-select-categoria');
-        if (!select) return;
-        select.innerHTML = montarOpcoesCategoriaImportacao(linha.categoriaId);
     });
 }
 

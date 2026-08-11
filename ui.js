@@ -6,6 +6,10 @@
 
 const UIModule = (() => {
     return {
+        /**
+         * Exibe a tela correta e revela o body (anti-flicker).
+         * Todas as telas ficam com visibility:hidden até esta chamada.
+         */
         showScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => {
                 s.classList.remove('active');
@@ -16,6 +20,7 @@ const UIModule = (() => {
                 screen.classList.add('active');
             }
 
+            // Revela o body agora que a tela correta está ativa
             document.body.classList.add('app-ready');
         },
 
@@ -125,6 +130,8 @@ const UIModule = (() => {
     };
 })();
 
+// Fallback: se o JS falhar e nunca chamar showScreen(),
+// revela o body após 2s para não deixar a tela em branco.
 setTimeout(() => document.body.classList.add('app-ready'), 2000);
 
 console.log('✅ ui.js carregado');

@@ -167,10 +167,6 @@
                             <span class="bi-value" id="biInvestments">R$ 0,00</span>
                         </div>
                         <div class="bi-item">
-                            <span class="bi-label">Dívidas e Financiamentos</span>
-                            <span class="bi-value" id="biDebt">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
                             <span class="bi-label">Renda Passiva</span>
                             <span class="bi-value" id="biPassiveIncome">R$ 0,00</span>
                         </div>
@@ -270,7 +266,6 @@
                                 <tbody id="importReviewTableBody"></tbody>
                             </table>
                         </div>
-                        <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()" style="margin:14px 0 4px;">+ Criar categoria personalizada</button>
                         <div class="import-review__actions">
                             <button type="button" class="btn--secondary btn" id="btnCancelarImportacao">Cancelar</button>
                             <button type="button" class="btn btn--primary" id="btnConfirmarImportacao">✓ Confirmar Importação</button>
@@ -352,7 +347,6 @@
             <section id="cli-planning" class="view-section">
                 <div class="card">
                     <h3>📊 Planejamento Personalizado</h3>
-                    <div id="clientPlanningRequestArea"></div>
                     <div id="clientPlanningList">
                         <p class="empty-state">Aguardando planejamento do administrador...</p>
                     </div>
@@ -411,31 +405,6 @@
                 <p id="profileClientEmail" style="color:#6495ff; font-size:14px;"></p>
             </div>
             <button onclick="handleLogout()" class="btn btn--logout" style="width:100%; margin-top:20px;">🚪 Sair da conta</button>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================================
-     MODAL: SOLICITAR PLANEJAMENTO
-     Permite ao cliente avisar o administrador que quer um
-     planejamento personalizado, com uma mensagem opcional dizendo o
-     que gostaria de incluir.
-============================================================ -->
-<div id="modalSolicitarPlanejamento" class="modal hidden">
-    <div class="modal__content" style="max-width:440px;">
-        <header class="modal__header">
-            <h2>📩 Solicitar Planejamento</h2>
-            <button onclick="closeModal('modalSolicitarPlanejamento')" class="modal__close-btn">✕</button>
-        </header>
-        <div class="modal__body">
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                O administrador vai receber um aviso e criar um planejamento personalizado pra você.
-            </p>
-            <div class="form-group">
-                <label>Quer contar alguma coisa específica? (opcional)</label>
-                <textarea id="solicitarPlanejamentoMensagem" rows="4" placeholder="Ex: Quero focar em juntar dinheiro para uma viagem no fim do ano..."></textarea>
-            </div>
-            <button type="button" onclick="handleEnviarSolicitacaoPlanejamento()" id="btnEnviarSolicitacaoPlanejamento" class="btn btn--primary" style="width:100%;">Enviar Solicitação</button>
         </div>
     </div>
 </div>
