@@ -2,50 +2,74 @@
    GESTOR FINANCEIRO PRO — admin.css
    Design System Darktech — Painel do Administrador
    CSS Variables definidas aqui. Mobile: sidebar → bottom navbar.
+
+   ATUALIZAÇÃO — PILLS DE PERÍODO (Razonete): .razonete-periodo-pills
+   e .razonete-periodo-pill, filtro rápido de período (Hoje/Ontem/
+   7 dias/Este mês/Mês passado/Tudo) acima dos filtros de Cliente/Tipo.
+
+   ATUALIZAÇÃO — CORREÇÃO DO "VAZAMENTO" DO risk-badge (ATENÇÃO/SEM
+   DADOS) NOS CARDS DE "Dashboards dos Clientes":
+   O container de nome+email dentro de .card-header-row (o <div> que
+   embrulha .card-name/.card-sub) não tinha min-width:0. Em flexbox,
+   por padrão um item nunca encolhe abaixo do tamanho do seu próprio
+   conteúdo (min-width:auto) — então um nome/email compridos (ex:
+   "Roger Hugo Mendonça de Almeida" + e-mail longo) empurravam a linha
+   inteira para além da largura do card, fazendo o .risk-badge (que já
+   tinha flex-shrink:0) "vazar" visualmente para fora da borda do
+   cartão, cortado pelo overflow. Corrigido com min-width:0 no
+   container do nome + quebra de palavra no nome/e-mail + flex-wrap no
+   header-row como rede de segurança para nomes realmente extremos.
+
+   ATUALIZAÇÃO — CONTABILIDADE (DRE, BALANCETE, PLANO DE CONTAS):
+   Adicionados estilos para:
+     - .modal-dashboard__tabs / .modal-dashboard__tab-content: abas
+       Resumo/DRE/Balancete dentro do modal "Ver Dashboard".
+     - .dre-* / .balancete-*: tabelas da Demonstração do Resultado e
+       do Balancete de Verificação.
+     - .plano-contas-secao*: agrupamento por seção contábil na grade
+       de Categorias (admin.html/categorias.js).
+     - .modal-ampliado* / .toolbar-*: modal em tela cheia do Balancete
+       Ampliado, com zoom e ferramentas de anotação (caneta/texto/
+       borracha) desenhando num canvas por cima da tabela real.
+     - @media print: impressão/"Exportar PDF" via diálogo nativo do
+       navegador, tanto pra DRE/Balancete quanto pro Balancete
+       Ampliado (já com as anotações desenhadas).
+   Nada do que já existia foi removido — só adições.
    ============================================================ */
 
 /* ── Variáveis do Design System ─────────────────────────────── */
 :root {
-  /* Backgrounds */
   --bg-root:        #060d0a;
   --bg-surface:     #0a120e;
   --bg-card:        #0f1a14;
   --bg-input:       #0d1610;
   --bg-input-focus: #121e16;
 
-  /* Bordas */
   --border-default: rgba(0, 200, 120, 0.12);
   --border-focus:   rgba(0, 245, 160, 0.45);
 
-  /* Acentos */
   --accent-primary: #00f5a0;
   --accent-glow:    rgba(0, 245, 160, 0.12);
   --accent-warning: #ffb443;
   --accent-danger:  #ff4d6d;
 
-  /* Texto */
   --text-primary:   #e8eaf6;
   --text-secondary: #6b9e84;
   --text-muted:     #3d6352;
 
-  /* Tipografia */
   --font-body: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   --font-mono: 'Courier New', monospace;
 
-  /* Bordas arredondadas */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  /* Transição */
   --transition: 0.2s ease;
 
-  /* Dimensões de layout */
   --sidebar-w:  200px;
   --navbar-h:   64px;
 }
 
-/* ── Reset base ─────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 .app-body {
@@ -251,29 +275,48 @@
   flex-direction: column;
   gap: 0.75rem;
   transition: border-color var(--transition);
+  /* Rede de segurança: nada dentro do card (badges, textos longos)
+     deve conseguir ultrapassar visualmente a borda do cartão. */
+  overflow: hidden;
 }
 
 .card:hover { border-color: #2a4a38; }
 
-.card-name { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
-.card-sub  { font-size: 0.8rem; color: var(--text-secondary); }
+.card-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
 
-/* ── Card header row (nome/email de um lado, conteúdo do outro) ──
-   Usado por clientes.js (nome do cliente) e dashboards.js (nome do
-   cliente + selo de risco). Substitui o antigo .card-link-row, que
-   ficou sem uso depois que o link individual do cliente foi
-   removido a pedido. */
+.card-sub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 .card-header-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.75rem;
+  /* Rede de segurança extra para nomes/e-mails muito longos: o badge
+     pode quebrar pra linha de baixo em vez de forçar overflow. */
+  flex-wrap: wrap;
 }
 
-/* ── Selo de risco (dashboards.js) ────────────────────────────
-   Classificação de risco financeiro do cliente, calculada a partir
-   do saldo e da cobertura de renda passiva. Mostrado direto no card
-   da grid "Dashboards", sem precisar abrir o dashboard individual. */
+/* CORREÇÃO DO VAZAMENTO: este é o container de nome+e-mail (o
+   primeiro filho direto de .card-header-row). Sem min-width:0, um
+   item flex nunca encolhe abaixo da largura do seu conteúdo — um
+   nome ou e-mail comprido empurrava o .risk-badge pra fora da borda
+   visível do card. */
+.card-header-row > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .risk-badge {
   display: inline-flex;
   align-items: center;
@@ -340,6 +383,19 @@
 .btn-card.deletar:hover { background: rgba(255,77,109,0.22); }
 .btn-card.ver-dashboard { background: rgba(66,99,235,0.12);  border-color: rgba(66,99,235,0.25); color: #7b96ff; }
 .btn-card.ver-dashboard:hover { background: rgba(66,99,235,0.22); }
+.btn-card.confirmar     { background: rgba(0,245,160,0.14);  border-color: rgba(0,245,160,0.35);  color: var(--accent-primary); }
+.btn-card.confirmar:hover { background: rgba(0,245,160,0.26); }
+
+/* Card de categoria PENDENTE DE CONTABILIZAÇÃO — borda âmbar pra
+   chamar atenção visualmente, distinguindo de um card comum. */
+.card--pendente {
+  border-color: rgba(255, 180, 67, 0.35);
+  background: linear-gradient(180deg, rgba(255, 180, 67, 0.05), var(--bg-card) 60%);
+}
+
+.card--pendente:hover {
+  border-color: rgba(255, 180, 67, 0.55);
+}
 
 /* ── Metas ───────────────────────────────────────────────────── */
 .meta-cliente-badge {
@@ -424,6 +480,38 @@
 }
 
 /* ── Razonete ────────────────────────────────────────────────── */
+
+.razonete-periodo-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.razonete-periodo-pill {
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.razonete-periodo-pill:hover {
+  border-color: rgba(0, 245, 160, 0.3);
+  color: var(--text-primary);
+}
+
+.razonete-periodo-pill.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #060e09;
+}
+
 .razonete-filters {
   display: flex;
   gap: 1.5rem;
@@ -465,6 +553,7 @@
 }
 
 .filter-group select:focus { border-color: var(--border-focus); }
+.filter-group input:focus { border-color: var(--border-focus); }
 
 .razonete-list {
   display: flex;
@@ -573,7 +662,6 @@
   flex-shrink: 0;
 }
 
-/* Inputs de modal */
 .form-group { display: flex; flex-direction: column; gap: 0.35rem; }
 
 .modal-body .form-group label {
@@ -607,7 +695,6 @@
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* Botões modais */
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--border-default);
@@ -846,6 +933,360 @@
 
 .hidden { display: none !important; }
 
+/* ══════════════════════════════════════════════════════════════
+   ABAS DO MODAL "VER DASHBOARD" — Resumo / DRE / Balancete
+   ══════════════════════════════════════════════════════════════ */
+
+.modal-dashboard__tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  flex-wrap: wrap;
+}
+
+.modal-dashboard__tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.65rem 0.25rem;
+  margin-bottom: -1px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.modal-dashboard__tab:hover { color: var(--text-primary); }
+
+.modal-dashboard__tab.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.modal-dashboard__tab-content { display: none; }
+.modal-dashboard__tab-content.active { display: block; }
+
+.dre-actions,
+.balancete-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   DRE — DEMONSTRAÇÃO DO RESULTADO
+   ══════════════════════════════════════════════════════════════ */
+
+.dre-header { margin-bottom: 1rem; }
+.dre-header h4 { font-size: 1rem; color: var(--text-primary); font-weight: 700; }
+.dre-periodo { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem; }
+
+.dre-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.dre-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.dre-table td:last-child {
+  text-align: right;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.dre-secao td {
+  font-weight: 800;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.78rem;
+  padding-top: 1rem;
+  border-bottom: none;
+}
+
+.dre-subtitulo td {
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  padding-top: 0.6rem;
+  border-bottom: none;
+}
+
+.dre-linha__nome { padding-left: 1.25rem; color: var(--text-primary); }
+.dre-linha--despesa .dre-linha__nome { color: var(--text-secondary); }
+
+.dre-subtotal td {
+  font-weight: 700;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 2px solid var(--border-default);
+  color: var(--text-primary);
+}
+
+.dre-resultado td {
+  font-weight: 800;
+  font-size: 0.95rem;
+  padding-top: 0.85rem;
+  border-top: 2px solid var(--border-default);
+  border-bottom: none;
+}
+
+.dre-resultado.positivo td:last-child { color: var(--accent-primary); }
+.dre-resultado.negativo td:last-child { color: var(--accent-danger); }
+
+.dre-margem td { color: var(--text-muted); font-size: 0.78rem; border-bottom: none; }
+
+.dre-vazio { text-align: center !important; color: var(--text-muted); font-style: italic; }
+
+.dre-nota {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BALANCETE DE VERIFICAÇÃO
+   ══════════════════════════════════════════════════════════════ */
+
+.balancete-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.balancete-table th {
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.balancete-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-primary);
+}
+
+.balancete-codigo { font-family: var(--font-mono); color: var(--text-muted); white-space: nowrap; }
+.balancete-grupo  { color: var(--text-secondary); font-size: 0.78rem; }
+.balancete-valor  { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.balancete-valor.positivo { color: var(--accent-primary); }
+.balancete-valor.negativo { color: var(--accent-danger); }
+
+.balancete-total td {
+  font-weight: 800;
+  border-top: 2px solid var(--border-default);
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.balancete-total td:first-child { text-align: left; font-family: var(--font-body); }
+
+/* ══════════════════════════════════════════════════════════════
+   PLANO DE CONTAS (Categorias agrupadas por seção contábil)
+   ══════════════════════════════════════════════════════════════ */
+
+.plano-contas-secao { margin-bottom: 1.75rem; }
+
+.plano-contas-secao__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.85rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.plano-contas-secao__codigo {
+  font-family: var(--font-mono);
+  background: rgba(0, 245, 160, 0.12);
+  color: var(--accent-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.plano-contas-secao__label {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.plano-contas-secao__contador {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.plano-contas-secao__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+
+.conta-codigo {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-right: 0.35rem;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MODAL BALANCETE AMPLIADO — zoom + anotação (caneta/texto/borracha)
+   ══════════════════════════════════════════════════════════════ */
+
+.modal-ampliado {
+  max-width: 96vw;
+  width: 96vw;
+  max-height: 94vh;
+}
+
+.modal-ampliado__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.modal-ampliado__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-input);
+  flex-shrink: 0;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.toolbar-group--zoom { margin-left: auto; }
+
+.toolbar-label { font-size: 0.72rem; color: var(--text-secondary); }
+
+.toolbar-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.toolbar-btn:hover { border-color: var(--accent-primary); }
+.toolbar-btn.active { background: rgba(0,245,160,0.15); border-color: var(--accent-primary); }
+
+.modal-ampliado__content {
+  overflow: auto;
+  flex: 1;
+  padding: 2rem;
+  background: #0a0f0c;
+}
+
+.modal-ampliado__canvas-wrapper {
+  position: relative;
+  display: inline-block;
+  background: #fff;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+
+/* A tabela renderizada dentro do wrapper claro precisa de cores
+   legíveis em fundo branco — os componentes .dre-table/.balancete-table
+   normalmente vivem num painel escuro, então sobrescrevemos aqui
+   dentro do wrapper específico do balancete ampliado. */
+.modal-ampliado__canvas-wrapper .balancete-table { color: #111; }
+.modal-ampliado__canvas-wrapper .balancete-table th { background: #eee; color: #333; }
+.modal-ampliado__canvas-wrapper .balancete-table td { border-bottom-color: #ddd; }
+.modal-ampliado__canvas-wrapper .balancete-codigo { color: #666; }
+.modal-ampliado__canvas-wrapper .balancete-grupo  { color: #555; }
+.modal-ampliado__canvas-wrapper .dre-header h4 { color: #111; }
+.modal-ampliado__canvas-wrapper .dre-periodo { color: #555; }
+
+#balancete-ampliado-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   IMPRESSÃO / EXPORTAR PDF (diálogo nativo do navegador)
+   ══════════════════════════════════════════════════════════════ */
+
+#areaImpressaoContabil { display: none; }
+
+@media print {
+  body.modo-impressao-contabil > *:not(#areaImpressaoContabil) { display: none !important; }
+
+  body.modo-impressao-contabil #areaImpressaoContabil {
+    display: block !important;
+    position: static;
+    color: #000;
+    background: #fff;
+    padding: 24px;
+  }
+
+  #areaImpressaoContabil * {
+    color: #000 !important;
+    background: transparent !important;
+    border-color: #999 !important;
+  }
+
+  #areaImpressaoContabil .impressao-titulo {
+    font-size: 20px;
+    margin-bottom: 16px;
+    font-weight: 800;
+  }
+
+  #areaImpressaoContabil .dre-actions,
+  #areaImpressaoContabil .balancete-actions {
+    display: none !important;
+  }
+
+  body.modo-impressao-balancete-ampliado > *:not(#modal-balancete-ampliado) {
+    display: none !important;
+  }
+
+  body.modo-impressao-balancete-ampliado #modal-balancete-ampliado {
+    position: static !important;
+  }
+
+  body.modo-impressao-balancete-ampliado #modal-balancete-ampliado .modal-ampliado__toolbar,
+  body.modo-impressao-balancete-ampliado #modal-balancete-ampliado .modal-ampliado__header-actions {
+    display: none !important;
+  }
+
+  body.modo-impressao-balancete-ampliado #modal-balancete-ampliado .modal-ampliado__content {
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  body.modo-impressao-balancete-ampliado #modal-balancete-ampliado .modal {
+    max-height: none !important;
+    box-shadow: none !important;
+  }
+}
+
 /* ── Animações ───────────────────────────────────────────────── */
 @keyframes fadeIn  { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -867,7 +1308,6 @@
 
 @media (max-width: 768px) {
 
-  /* ── Sidebar vira bottom navbar ─────────────────────────── */
   .sidebar {
     position: fixed;
     bottom: 0;
@@ -890,10 +1330,8 @@
     z-index: 9999;
   }
 
-  /* Esconde elementos apenas desktop */
   .sidebar-brand { display: none; }
 
-  /* sidebar-top: expande para ocupar a nav toda */
   .sidebar-top {
     flex-direction: row;
     flex: 1;
@@ -901,7 +1339,6 @@
     gap: 0;
   }
 
-  /* Nav: linha horizontal de ícones */
   .sidebar-nav {
     flex-direction: row;
     align-items: center;
@@ -911,7 +1348,6 @@
     gap: 0;
   }
 
-  /* Cada botão: ícone grande + label minúsculo */
   .nav-item {
     flex-direction: column;
     align-items: center;
@@ -937,7 +1373,6 @@
     color: var(--accent-primary);
   }
 
-  /* Ativo: verde + ponto indicador */
   .nav-item.active {
     color: var(--accent-primary);
     background: transparent;
@@ -958,14 +1393,12 @@
     box-shadow: 0 0 8px rgba(0, 245, 160, 0.7);
   }
 
-  /* Emoji maior que o texto label */
   .nav-icon {
     font-size: 19px;
     width: auto;
     text-align: center;
   }
 
-  /* sidebar-bottom: à direita, compacto */
   .sidebar-bottom {
     flex-direction: row;
     align-items: center;
@@ -976,7 +1409,6 @@
     flex: 0 0 auto;
   }
 
-  /* Botão Perfil: só ícone */
   .nav-item[data-section="perfil"] {
     width: 38px;
     flex: 0 0 38px;
@@ -988,7 +1420,6 @@
     gap: 2px;
   }
 
-  /* Botão Sair compacto */
   .btn-sair {
     width: auto;
     padding: 6px 10px;
@@ -997,7 +1428,6 @@
     border-radius: 6px;
   }
 
-  /* ── Main content: espaço para a navbar ─────────────────── */
   .main-content {
     margin-left: 0;
     padding: 1.25rem 1rem calc(var(--navbar-h) + 1rem);
@@ -1006,14 +1436,21 @@
     overflow-y: auto;
   }
 
-  /* ── Ajustes de componentes ──────────────────────────────── */
   .kpi-grid    { grid-template-columns: repeat(2, 1fr); }
   .charts-row  { grid-template-columns: 1fr; }
   .cards-grid  { grid-template-columns: 1fr; }
+  .plano-contas-secao__grid { grid-template-columns: 1fr; }
 
   .planejamento-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .razonete-periodo-pills { gap: 0.4rem; }
+
+  .razonete-periodo-pill {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.75rem;
   }
 
   .razonete-filters {
@@ -1024,8 +1461,12 @@
   .filter-group select { min-width: 100%; }
 
   .modal { max-width: 100%; border-radius: 12px 12px 0 0; }
+  .modal-ampliado { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
 
   .modal-overlay { align-items: flex-end; padding: 0; }
+
+  .modal-ampliado__toolbar { gap: 0.75rem; padding: 0.6rem 1rem; }
+  .toolbar-group--zoom { margin-left: 0; width: 100%; justify-content: center; }
 
   .toast { bottom: calc(var(--navbar-h) + 0.75rem); }
 }
@@ -1050,4 +1491,6 @@
   .card-header-row {
     flex-wrap: wrap;
   }
-} 
+
+  .modal-dashboard__tab { font-size: 0.78rem; }
+}

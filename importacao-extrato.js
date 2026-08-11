@@ -4,17 +4,27 @@
  * Fluxo completo:
  *   1. Cliente escolhe um arquivo .ofx ou .csv e clica "Processar Arquivo".
  *   2. O arquivo é normalizado em linhas { data, descricao, valor, tipo }.
- *   3. Cada linha passa por uma classificação de categoria, na ordem:
+ *   3. Cada linha passa primeiro pelas REGRAS DE NEGÓCIO ESPECÍFICAS DO
+ *      PADRÃO NUBANK (ver preClassificarTransacao(), abaixo) — RDB/
+ *      Caixinhas, Pagamento de fatura, Reembolso recebido e a limpeza
+ *      visual de "Compra no débito - ". Só depois disso é que entra o
+ *      pipeline de classificação normal, na ordem:
  *        a) regras_aprendidas (RegrasAprendidasModule.buscarRegra) —
  *           se o cliente já classificou esse termo antes, usa direto;
- *        b) classificador local por palavras-chave (classificarLocalmente,
- *           de smart-input.js) — cobre termos comuns mesmo sem histórico;
- *        c) se nada reconhecer, fica em aberto para seleção manual.
+ *        b) palavras-chave/sinônimos cadastrados pelo ADMIN em
+ *           `categorias.palavras_chave` (encontrarCategoriaPorPalavraChave,
+ *           de smart-input.js) — plano de contas curado manualmente,
+ *           mais confiável que a heurística fixa no código. Distingue
+ *           match EXATO (alta confiança) de match por RADICAL/raiz
+ *           comum (confiança aproximada — ver nota abaixo);
+ *        c) classificador local por palavras-chave FIXAS
+ *           (classificarLocalmente, de smart-input.js) — cobre termos
+ *           comuns mesmo sem nenhuma curadoria feita pelo admin ainda;
+ *        d) se nada reconhecer, fica em aberto para seleção manual.
  *      NENHUMA chamada de rede é feita por linha nesta etapa (nem ao
  *      endpoint /api/classify, que é só placeholder) — com um extrato de
  *      centenas de linhas, esperar N requisições que sempre falham (404)
- *      seria lento e inútil; regra aprendida + heurística local já
- *      resolvem a maioria dos casos reais instantaneamente.
+ *      seria lento e inútil.
  *   4. Uma tabela de revisão aparece — NADA foi salvo no banco ainda.
  *      O cliente confere/corrige cada linha (data, descrição, valor,
  *      tipo, categoria) e pode desmarcar linhas que não quer importar.
@@ -28,20 +38,51 @@
  * ui.js, client.js, app.js, smart-input.js, regras-aprendidas.js, e a
  * biblioteca externa PapaParse (CDN, só usada para o parser de CSV).
  *
+ * ATUALIZAÇÃO — "RECEITA ANTES DE DESPESA": o <select> nativo de tipo
+ * de cada linha (import-select-tipo) listava Despesa antes de Receita.
+ * Trocado para respeitar a mesma convenção usada no resto do sistema.
+ *
+ * ATUALIZAÇÃO — REGRAS NUBANK (preClassificarTransacao):
+ * Antes de qualquer classificação normal, cada linha passa por
+ * preClassificarTransacao(descricao, valorComSinal), que resolve 4
+ * casos especiais do extrato do Nubank:
+ *   1) "Aplicação RDB" / "Resgate RDB" — dinheiro só mudou de conta
+ *      (foi pra uma caixinha/investimento e volta), NÃO é receita nem
+ *      despesa de verdade -> vira Transferência Interna, categoria
+ *      pré-preenchida automaticamente.
+ *   2) "Pagamento de fatura" — evita contar a fatura do cartão como
+ *      despesa duplicada (as despesas reais já entram pelo extrato do
+ *      cartão em si) -> também vira Transferência Interna.
+ *   3) "Reembolso recebido" — não é salário/renda nova, é devolução de
+ *       um gasto que já tinha sido contabilizado -> Transferência
+ *       Interna também, para não inflar a receita do mês.
+ *   4) "Compra no débito - " — só uma limpeza visual: remove esse
+ *      prefixo da descrição pra tabela ficar mais legível, mas NÃO
+ *      força nenhuma categoria (o cliente/importador escolhe
+ *      normalmente, e a descrição já limpa ainda ajuda o classificador
+ *      por palavra-chave a reconhecer melhor o termo real).
+ * Para os casos 1-3 (bloquearCategoria=true), o sistema tenta achar
+ * automaticamente uma categoria REAL já cadastrada com
+ * grupo='transferencia' e o tipo certo (receita/despesa) — ver
+ * encontrarCategoriaDeTransferencia(). Se não existir nenhuma
+ * categoria de Transferência Interna cadastrada ainda, a linha cai de
+ * volta no pipeline normal de classificação, sem quebrar nada.
+ *
+ * ATUALIZAÇÃO — SELO DE CONFIANÇA NA TABELA DE REVISÃO:
+ * `encontrarCategoriaPorPalavraChave` (smart-input.js) agora devolve
+ * também se o match foi de ALTA confiança (sinônimo/nome bateu como
+ * substring exato) ou APROXIMADA (só a raiz da palavra bateu — ver
+ * nota completa em smart-input.js). A tabela de revisão reflete isso:
+ * o selo "🔑 Sinônimo" só aparece pra match de alta confiança; um
+ * match aproximado aparece como "🔎 Sugestão aproximada" — um alerta
+ * visual pra você prestar atenção extra naquela linha específica antes
+ * de confirmar a importação. NADA impede a importação por causa disso
+ * — é só um aviso, a decisão final continua sendo sua.
+ *
  * ⚠️ SOBRE O DROPDOWN DE CATEGORIA NESTA TABELA:
- * O resto do sistema usa um dropdown customizado (.custom-select) para
- * poder estilizar o Darktech corretamente no mobile — um <select>
- * nativo com <optgroup> não pode ser restilizado pelo SO (já
- * documentado em categoria-personalizada.js). Só que aqui, numa tabela
- * de revisão com potencialmente dezenas/centenas de linhas, instanciar
- * um dropdown customizado completo (com painel flutuante reposicionado
- * via JS) POR LINHA seria caro e complexo sem necessidade real. Por
- * isso esta tabela usa <select> NATIVO, mas SEM <optgroup> (o grupo vai
- * embutido no texto da opção, ex: "🟠 Alimentação") — evita exatamente
- * o problema documentado (optgroup não estilizável), mantendo a tabela
- * leve e performática. É uma exceção deliberada e isolada a este
- * contexto específico (edição tabular densa), não uma mudança no
- * padrão do resto do app.
+ * Esta tabela usa <select> NATIVO (sem <optgroup>) por performance
+ * numa tabela potencialmente com centenas de linhas — ver explicação
+ * completa na versão anterior deste comentário; nada mudou aqui.
  */
 
 // ── Estado do módulo ────────────────────────────────────────────
@@ -53,21 +94,112 @@ const GRUPO_LABEL_IMPORTACAO = {
     essencial:      '🟠 Essencial',
     estilo_de_vida: '🎯 Estilo de Vida',
     investimento:   '💰 Investimento',
+    divida:         '💳 Dívida/Financiamento',
+    transferencia:  '🔄 Transferência Interna',
     renda:          '📈 Renda'
 };
+
+// ══════════════════════════════════════════════════════════════
+// REGRAS DE NEGÓCIO ESPECÍFICAS DO PADRÃO NUBANK
+// ══════════════════════════════════════════════════════════════
+/**
+ * Recebe a descrição bruta de uma linha do extrato e o valor NUMÉRICO
+ * COM SINAL (negativo = saída/despesa, positivo = entrada/receita) e
+ * devolve como essa linha deve ser tratada, ANTES de qualquer
+ * classificação por palavra-chave.
+ *
+ * @param {string} descricao - descrição original da linha do extrato
+ * @param {number} valor - valor com sinal (negativo = despesa)
+ * @returns {{ tipo: string, grupo: string|null, descricaoLimpa: string, bloquearCategoria: boolean }}
+ *   tipo: 'Receita' | 'Despesa' | 'Transferência Interna'
+ *   grupo: rótulo do grupo (ou null quando não é um caso especial)
+ *   descricaoLimpa: descrição já sem prefixos técnicos (ex: "Compra no débito - ")
+ *   bloquearCategoria: true quando o sistema já decidiu que isso NÃO é
+ *     receita/despesa de verdade e a categoria deve ser preenchida
+ *     automaticamente com uma de Transferência Interna, sem passar
+ *     pelo classificador normal.
+ */
+function preClassificarTransacao(descricao, valor) {
+    const desc = (descricao || '').toLowerCase();
+    const tipoPorValor = valor >= 0 ? 'Receita' : 'Despesa';
+
+    // 1) Gestão de Patrimônio (RDB / Caixinhas)
+    if (desc.includes('aplicação rdb') || desc.includes('aplicacao rdb') ||
+        desc.includes('resgate rdb')) {
+        return {
+            tipo: tipoPorValor,
+            grupo: 'Transferência Interna (não conta como ganho)',
+            descricaoLimpa: descricao,
+            bloquearCategoria: true
+        };
+    }
+
+    // 2) Gestão de Cartão de Crédito
+    if (desc.includes('pagamento de fatura')) {
+        return {
+            tipo: 'Transferência Interna',
+            grupo: 'Transferência Interna (não conta como ganho)',
+            descricaoLimpa: descricao,
+            bloquearCategoria: true
+        };
+    }
+
+    // 3) Reembolsos e Estornos
+    if (desc.includes('reembolso recebido')) {
+        return {
+            tipo: 'Receita',
+            grupo: 'Transferência Interna (não conta como ganho)',
+            descricaoLimpa: descricao,
+            bloquearCategoria: true
+        };
+    }
+
+    // 4) Limpeza Visual (UX)
+    const prefixoCompraDebito = 'compra no débito - ';
+    const prefixoCompraDebitoSemAcento = 'compra no debito - ';
+    if (desc.startsWith(prefixoCompraDebito) || desc.startsWith(prefixoCompraDebitoSemAcento)) {
+        const tamanhoPrefixo = desc.startsWith(prefixoCompraDebito)
+            ? prefixoCompraDebito.length
+            : prefixoCompraDebitoSemAcento.length;
+
+        return {
+            tipo: tipoPorValor,
+            grupo: null,
+            descricaoLimpa: descricao.slice(tamanhoPrefixo),
+            bloquearCategoria: false
+        };
+    }
+
+    // 5) Fallback (Padrão)
+    return {
+        tipo: tipoPorValor,
+        grupo: null,
+        descricaoLimpa: descricao,
+        bloquearCategoria: false
+    };
+}
+
+/**
+ * Procura, entre as categorias JÁ CADASTRADAS (categoriasCacheImportacao),
+ * uma categoria real do grupo 'transferencia' com o `tipo` pedido —
+ * usada para pré-preencher automaticamente linhas que
+ * preClassificarTransacao() identificou como "não é receita/despesa de
+ * verdade" (RDB, fatura, reembolso). Se não existir nenhuma categoria
+ * de Transferência Interna cadastrada ainda para esse tipo, retorna
+ * null — a linha cai de volta no pipeline normal de classificação,
+ * sem quebrar nada.
+ */
+function encontrarCategoriaDeTransferencia(tipo) {
+    if (!categoriasCacheImportacao) return null;
+    const cat = categoriasCacheImportacao.find(c => c.tipo === tipo && c.grupo === 'transferencia');
+    if (!cat) return null;
+    return { categoriaId: cat.id, categoriaNome: cat.nome, origem: 'pre_classificado' };
+}
 
 // ══════════════════════════════════════════════════════════════
 // UTILITÁRIOS DE HASH E NORMALIZAÇÃO
 // ══════════════════════════════════════════════════════════════
 
-/**
- * Hash determinístico simples (FNV-1a de 32 bits) — usado para gerar o
- * `import_hash` de linhas de CSV, que não têm um identificador único
- * de banco como o FITID do OFX. Duas linhas com a mesma data+valor+
- * descrição (normalizada) sempre geram o mesmo hash — é isso que a
- * constraint `UNIQUE (client_id, import_hash)` do banco usa para
- * impedir importar o mesmo lançamento duas vezes.
- */
 function hashFNV1a(texto) {
     let hash = 0x811c9dc5;
     for (let i = 0; i < texto.length; i++) {
@@ -82,20 +214,12 @@ function gerarImportHashCsv(data, valorAbs, descricao) {
     return `csv:${hashFNV1a(chave)}`;
 }
 
-/**
- * Converte data em vários formatos comuns de extrato para 'YYYY-MM-DD'.
- * Aceita: 'YYYY-MM-DD' (já correto), 'DD/MM/YYYY', 'DD/MM/YY'.
- * Retorna null se não conseguir reconhecer o formato — quem chama trata
- * isso descartando a linha (não adivinha uma data errada).
- */
 function normalizarDataImportacao(valorBruto) {
     const v = (valorBruto || '').trim();
     if (!v) return null;
 
-    // Já no formato ISO
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
 
-    // DD/MM/YYYY ou DD/MM/YY
     const matchBr = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
     if (matchBr) {
         let [, dia, mes, ano] = matchBr;
@@ -103,7 +227,6 @@ function normalizarDataImportacao(valorBruto) {
         return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
     }
 
-    // DTPOSTED do OFX: YYYYMMDD... (com hora/timezone opcional depois)
     const matchOfx = v.match(/^(\d{4})(\d{2})(\d{2})/);
     if (matchOfx) {
         const [, ano, mes, dia] = matchOfx;
@@ -113,30 +236,20 @@ function normalizarDataImportacao(valorBruto) {
     return null;
 }
 
-/**
- * Converte um valor monetário de texto para número, tolerando os dois
- * formatos comuns em extratos brasileiros: "1234.56" (ponto decimal,
- * comum em OFX) e "1.234,56" ou "1234,56" (vírgula decimal, comum em
- * CSV exportado de internet banking BR).
- */
 function normalizarValorImportacao(valorBruto) {
     let v = String(valorBruto ?? '').trim();
     if (!v) return NaN;
 
-    // Remove símbolo de moeda e espaços, mantém sinal e dígitos/pontuação
     v = v.replace(/[^\d,.\-+]/g, '');
 
     const temVirgula = v.includes(',');
     const temPonto   = v.includes('.');
 
     if (temVirgula && temPonto) {
-        // "1.234,56" -> ponto é milhar, vírgula é decimal
         v = v.replace(/\./g, '').replace(',', '.');
     } else if (temVirgula && !temPonto) {
-        // "1234,56" -> vírgula é decimal
         v = v.replace(',', '.');
     }
-    // Só ponto, ou nenhum separador: já está no formato que parseFloat entende
 
     return parseFloat(v);
 }
@@ -144,10 +257,6 @@ function normalizarValorImportacao(valorBruto) {
 // ══════════════════════════════════════════════════════════════
 // PARSER OFX
 // ══════════════════════════════════════════════════════════════
-// Cobre tanto OFX 1.x (SGML — tags muitas vezes sem fechamento, valor
-// vai até a quebra de linha ou próxima tag) quanto OFX 2.x (XML — tags
-// sempre fechadas). A extração por regex abaixo funciona para os dois,
-// porque busca o valor entre a tag de abertura e o próximo '<'.
 
 function extrairTagOfx(bloco, tag) {
     const regex = new RegExp(`<${tag}>\\s*([^<\\r\\n]*)`, 'i');
@@ -177,7 +286,7 @@ function parsearOfx(textoOfx) {
             descricao:   memo || '(sem descrição)',
             valorAbs:    Math.abs(valorBrut),
             tipo:        valorBrut < 0 ? 'despesa' : 'receita',
-            importHash:  fitid ? `ofx:${fitid}` : null // se faltar FITID, cai no hash sintético depois
+            importHash:  fitid ? `ofx:${fitid}` : null
         };
     });
 }
@@ -185,10 +294,6 @@ function parsearOfx(textoOfx) {
 // ══════════════════════════════════════════════════════════════
 // PARSER CSV (via PapaParse, carregado por CDN no HTML)
 // ══════════════════════════════════════════════════════════════
-// Detecta automaticamente qual coluna é qual pelo NOME do cabeçalho
-// (tolerante a variações comuns em português/inglês). Se o CSV não
-// tiver cabeçalho reconhecível, lança um erro claro em vez de adivinhar
-// e importar dados errados.
 
 const COLUNAS_DATA_ACEITAS      = ['data', 'date', 'dt'];
 const COLUNAS_DESCRICAO_ACEITAS = ['descricao', 'descrição', 'historico', 'histórico', 'memo', 'lancamento', 'lançamento', 'title', 'description'];
@@ -219,7 +324,7 @@ function parsearCsv(textoCsv) {
     const colData      = encontrarColuna(headers, COLUNAS_DATA_ACEITAS);
     const colDescricao = encontrarColuna(headers, COLUNAS_DESCRICAO_ACEITAS);
     const colValor      = encontrarColuna(headers, COLUNAS_VALOR_ACEITAS);
-    const colTipo        = encontrarColuna(headers, COLUNAS_TIPO_ACEITAS); // opcional
+    const colTipo        = encontrarColuna(headers, COLUNAS_TIPO_ACEITAS);
 
     if (!colData || !colDescricao || !colValor) {
         throw new Error(
@@ -233,9 +338,6 @@ function parsearCsv(textoCsv) {
         const valorBruto = normalizarValorImportacao(linha[colValor]);
         const descricao  = (linha[colDescricao] || '(sem descrição)').trim();
 
-        // Se o CSV tiver uma coluna de tipo explícita e ela disser
-        // "receita"/"despesa" (ou credit/debit), respeita isso em vez de
-        // inferir só pelo sinal do valor — mais confiável quando existe.
         let tipo = valorBruto < 0 ? 'despesa' : 'receita';
         if (colTipo) {
             const tipoTexto = normalizarTexto(linha[colTipo]);
@@ -249,28 +351,30 @@ function parsearCsv(textoCsv) {
             descricao,
             valorAbs:   Math.abs(valorBruto),
             tipo,
-            importHash: null // CSV não tem ID de banco — hash sintético calculado depois
+            importHash: null
         };
     });
 }
 
 // ══════════════════════════════════════════════════════════════
-// CLASSIFICAÇÃO POR LINHA (regra aprendida -> heurística local)
+// CLASSIFICAÇÃO POR LINHA (regra aprendida -> sinônimo -> heurística)
 // ══════════════════════════════════════════════════════════════
 
 /**
  * Classifica uma linha já normalizada, tentando na ordem: regra
- * aprendida do cliente, depois heurística local por palavras-chave.
- * NÃO chama nenhum endpoint de rede (ver nota no cabeçalho do arquivo).
- * Retorna { categoriaId, categoriaNome, origem } — categoriaId fica
- * null se nada reconhecer a descrição (precisa de seleção manual).
+ * aprendida do cliente, palavras-chave/sinônimos cadastrados pelo
+ * admin (ou nome da categoria, com distinção de confiança — ver
+ * smart-input.js), depois heurística local FIXA por palavras-chave.
+ * NÃO chama nenhum endpoint de rede. Retorna { categoriaId,
+ * categoriaNome, origem } — categoriaId fica null se nada reconhecer a
+ * descrição (precisa de seleção manual). `origem` pode ser
+ * 'palavra_chave' (alta confiança) ou 'palavra_chave_aproximada'
+ * (confiança por radical — ver ORIGEM_BADGE_LABEL abaixo).
  */
 async function classificarLinhaImportacao(clienteId, descricao, tipoSugerido) {
     // 1) Regra aprendida — um termo aprendido vale mesmo que o sinal do
     // valor no extrato pareça contradizer (o cliente já confirmou essa
-    // classificação antes; extratos às vezes têm sinais inconsistentes
-    // em estornos/transferências, e a regra aprendida é mais confiável
-    // que a heurística de sinal nesse caso).
+    // classificação antes).
     if (typeof RegrasAprendidasModule !== 'undefined') {
         const regra = await RegrasAprendidasModule.buscarRegra(clienteId, descricao);
         if (regra) {
@@ -279,11 +383,22 @@ async function classificarLinhaImportacao(clienteId, descricao, tipoSugerido) {
         }
     }
 
-    // 2) Heurística local — só aceita o match se o tipo sugerido pela
-    // regra de palavra-chave BATER com o tipo já inferido pelo sinal do
-    // valor no extrato. Se não bater, não força uma categoria
-    // inconsistente — deixa em aberto para seleção manual em vez de
-    // arriscar salvar uma despesa com categoria de renda (ou vice-versa).
+    // 2) Palavras-chave/sinônimos cadastrados pelo admin (ou nome da
+    // categoria) — plano de contas curado manualmente — só aceita se o
+    // tipo bater com o sinal do valor no extrato, pela mesma razão de
+    // segurança do passo 3 abaixo (nunca grava uma categoria de tipo
+    // inconsistente).
+    if (typeof encontrarCategoriaPorPalavraChave === 'function') {
+        const catPorSinonimo = encontrarCategoriaPorPalavraChave(categoriasCacheImportacao, descricao);
+        if (catPorSinonimo && catPorSinonimo.tipo === tipoSugerido) {
+            const origem = catPorSinonimo._confiancaAlta === false ? 'palavra_chave_aproximada' : 'palavra_chave';
+            return { categoriaId: catPorSinonimo.id, categoriaNome: catPorSinonimo.nome, origem };
+        }
+    }
+
+    // 3) Heurística local FIXA — só aceita o match se o tipo sugerido
+    // pela regra de palavra-chave BATER com o tipo já inferido pelo
+    // sinal do valor no extrato.
     if (typeof classificarLocalmente === 'function') {
         const resultadoLocal = classificarLocalmente(descricao);
         if (resultadoLocal && resultadoLocal.tipo === tipoSugerido) {
@@ -294,7 +409,7 @@ async function classificarLinhaImportacao(clienteId, descricao, tipoSugerido) {
         }
     }
 
-    // 3) Nada reconheceu (ou o tipo não batia) — precisa de seleção manual
+    // 4) Nada reconheceu (ou o tipo não batia) — precisa de seleção manual
     return { categoriaId: null, categoriaNome: null, origem: 'manual' };
 }
 
@@ -333,12 +448,6 @@ async function processarArquivoImportacao() {
         const clienteId = ClientModule.getClientId();
         categoriasCacheImportacao = await DatabaseModule.getCategorias();
 
-        // Dedup: busca de uma vez só os import_hash que JÁ existem no
-        // banco para este cliente, entre os hashes conhecidos deste
-        // arquivo (linhas OFX com FITID já têm hash pronto; linhas sem
-        // hash pronto — CSV, ou OFX sem FITID — recebem um hash
-        // sintético ANTES desta consulta, para que a checagem cubra
-        // 100% das linhas).
         linhasValidas.forEach(l => {
             if (!l.importHash) l.importHash = gerarImportHashCsv(l.data, l.valorAbs, l.descricao);
         });
@@ -346,18 +455,43 @@ async function processarArquivoImportacao() {
         const hashesDoArquivo = linhasValidas.map(l => l.importHash);
         hashesJaImportadosCache = await buscarHashesJaImportados(clienteId, hashesDoArquivo);
 
-        // Classifica cada linha (regra aprendida -> heurística local)
         linhasImportacao = [];
+        let totalPreClassificadas = 0;
+        let totalAproximadas      = 0;
+
         for (const linha of linhasValidas) {
             const duplicada = hashesJaImportadosCache.has(linha.importHash);
-            const classificacao = duplicada
-                ? { categoriaId: null, categoriaNome: null, origem: 'duplicada' }
-                : await classificarLinhaImportacao(clienteId, linha.descricao, linha.tipo);
+
+            // Regras de negócio específicas do padrão Nubank (RDB,
+            // fatura, reembolso, "Compra no débito -") — rodam ANTES do
+            // pipeline normal de classificação, porque são casos
+            // especiais que não devem contar como receita/despesa de
+            // verdade, ou que só precisam de uma limpeza visual na
+            // descrição. Ver preClassificarTransacao() no topo do arquivo.
+            const valorComSinal   = linha.tipo === 'despesa' ? -linha.valorAbs : linha.valorAbs;
+            const preClassificacao = preClassificarTransacao(linha.descricao, valorComSinal);
+            const descricaoFinal   = preClassificacao.descricaoLimpa || linha.descricao;
+
+            let classificacao;
+            if (duplicada) {
+                classificacao = { categoriaId: null, categoriaNome: null, origem: 'duplicada' };
+            } else if (preClassificacao.bloquearCategoria) {
+                // Tenta achar uma categoria real de Transferência Interna
+                // já cadastrada; se não existir, cai de volta no pipeline
+                // normal (sem quebrar nada).
+                classificacao = encontrarCategoriaDeTransferencia(linha.tipo) ||
+                    await classificarLinhaImportacao(clienteId, descricaoFinal, linha.tipo);
+                if (classificacao.origem === 'pre_classificado') totalPreClassificadas++;
+            } else {
+                classificacao = await classificarLinhaImportacao(clienteId, descricaoFinal, linha.tipo);
+            }
+
+            if (classificacao.origem === 'palavra_chave_aproximada') totalAproximadas++;
 
             linhasImportacao.push({
                 idTemp:      (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`,
                 data:        linha.data,
-                descricao:   linha.descricao,
+                descricao:   descricaoFinal,
                 valor:       linha.valorAbs,
                 tipo:        linha.tipo,
                 categoriaId: classificacao.categoriaId,
@@ -373,6 +507,8 @@ async function processarArquivoImportacao() {
         const totalDuplicadas = linhasImportacao.filter(l => l.duplicada).length;
         let mensagem = `${linhasImportacao.length} lançamento(s) encontrado(s) e pronto(s) para revisão.`;
         if (linhasDescartadas > 0) mensagem += ` ${linhasDescartadas} linha(s) foram ignoradas por falta de data/valor reconhecíveis.`;
+        if (totalPreClassificadas > 0) mensagem += ` ${totalPreClassificadas} foram pré-classificada(s) automaticamente como Transferência Interna (RDB/fatura/reembolso).`;
+        if (totalAproximadas > 0) mensagem += ` ${totalAproximadas} tiveram sugestão APROXIMADA (🔎) — vale a pena conferir essas antes de confirmar.`;
         if (totalDuplicadas > 0)   mensagem += ` ${totalDuplicadas} já tinham sido importado(s) antes e vêm desmarcado(s) por padrão.`;
         exibirStatusImportacao(mensagem, false);
 
@@ -424,7 +560,12 @@ function montarOpcoesCategoriaImportacao(categoriaSelecionadaId) {
         porGrupo[chave].push(c);
     });
 
-    const ordemGrupos = ['despesa__essencial', 'despesa__estilo_de_vida', 'despesa__investimento', 'receita__renda'];
+    // Receita antes de despesa, mantendo os grupos dentro de cada tipo.
+    const ordemGrupos = [
+        'receita__renda', 'receita__transferencia',
+        'despesa__essencial', 'despesa__estilo_de_vida', 'despesa__investimento',
+        'despesa__divida', 'despesa__transferencia'
+    ];
     const chaves = [...ordemGrupos.filter(k => porGrupo[k]), ...Object.keys(porGrupo).filter(k => !ordemGrupos.includes(k))];
 
     let html = '<option value="">Selecione...</option>';
@@ -442,10 +583,13 @@ function montarOpcoesCategoriaImportacao(categoriaSelecionadaId) {
 }
 
 const ORIGEM_BADGE_LABEL = {
-    aprendida: { texto: '🧠 Aprendida', classe: 'aprendida' },
-    local:     { texto: '🤖 Sugerida',  classe: 'local' },
-    manual:    { texto: '✋ Manual',    classe: 'manual' },
-    duplicada: { texto: '⚠️ Já importada', classe: 'duplicada' }
+    aprendida:                { texto: '🧠 Aprendida',           classe: 'aprendida' },
+    palavra_chave:             { texto: '🔑 Sinônimo',            classe: 'local'     },
+    palavra_chave_aproximada: { texto: '🔎 Sugestão aproximada', classe: 'manual'    },
+    local:                     { texto: '🤖 Sugerida',            classe: 'local'     },
+    pre_classificado:         { texto: '🏦 Pré-classificado',    classe: 'aprendida' },
+    manual:                    { texto: '✋ Manual',              classe: 'manual'    },
+    duplicada:                 { texto: '⚠️ Já importada',        classe: 'duplicada' }
 };
 
 function renderizarTabelaRevisao() {
@@ -464,8 +608,8 @@ function renderizarTabelaRevisao() {
                 <td><input type="number" class="import-input-valor" value="${linha.valor.toFixed(2)}" step="0.01" min="0"></td>
                 <td>
                     <select class="import-select-tipo">
-                        <option value="despesa" ${linha.tipo === 'despesa' ? 'selected' : ''}>Despesa</option>
                         <option value="receita" ${linha.tipo === 'receita' ? 'selected' : ''}>Receita</option>
+                        <option value="despesa" ${linha.tipo === 'despesa' ? 'selected' : ''}>Despesa</option>
                     </select>
                 </td>
                 <td>
@@ -484,15 +628,10 @@ function renderizarTabelaRevisao() {
     ligarEventosLinhasImportacao();
 }
 
-// Escapa aspas para não quebrar o atributo value="..." quando a
-// descrição do banco contiver aspas (acontece com alguma frequência).
 function escaparHtmlAtributo(texto) {
     return (texto || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
-// Liga os eventos de cada linha renderizada (checkbox, campos
-// editáveis) — precisa ser chamado toda vez que a tabela é recriada,
-// já que o innerHTML novo descarta os listeners anteriores.
 function ligarEventosLinhasImportacao() {
     document.querySelectorAll('#importReviewTableBody tr').forEach(tr => {
         const idTemp = tr.dataset.idTemp;
@@ -520,6 +659,22 @@ function ligarEventosLinhasImportacao() {
     });
 }
 
+async function atualizarCategoriasNaTabelaImportacao() {
+    if (!linhasImportacao.length) return;
+
+    categoriasCacheImportacao = await DatabaseModule.getCategorias();
+
+    document.querySelectorAll('#importReviewTableBody tr').forEach(tr => {
+        const idTemp = tr.dataset.idTemp;
+        const linha  = linhasImportacao.find(l => l.idTemp === idTemp);
+        if (!linha) return;
+
+        const select = tr.querySelector('.import-select-categoria');
+        if (!select) return;
+        select.innerHTML = montarOpcoesCategoriaImportacao(linha.categoriaId);
+    });
+}
+
 function initImportacaoExtrato() {
     document.getElementById('btnProcessarImportacao')?.addEventListener('click', processarArquivoImportacao);
     document.getElementById('btnCancelarImportacao')?.addEventListener('click', cancelarImportacao);
@@ -544,7 +699,16 @@ function cancelarImportacao() {
 // ══════════════════════════════════════════════════════════════
 // CONFIRMAÇÃO: SALVA NO BANCO + APRENDE AS CORREÇÕES
 // ══════════════════════════════════════════════════════════════
-
+/**
+ * GARANTIA DURA antes de qualquer gravação: para CADA linha marcada
+ * pra importar, exige categoria selecionada e verifica
+ * `cat.tipo === linha.tipo` — se não bater, a importação inteira é
+ * bloqueada com uma mensagem apontando exatamente qual linha está
+ * inconsistente. Essa checagem NÃO depende de confiança de
+ * classificação nenhuma; roda por igual em toda linha, tenha ela vindo
+ * de uma regra aprendida, um sinônimo, uma sugestão aproximada ou uma
+ * escolha 100% manual.
+ */
 async function confirmarImportacao() {
     const clientId = ClientModule.getClientId();
     const linhasParaSalvar = linhasImportacao.filter(l => l.incluir && !l.duplicada);
@@ -554,10 +718,6 @@ async function confirmarImportacao() {
         return;
     }
 
-    // Validação: toda linha incluída precisa ter categoria escolhida, E
-    // essa categoria precisa bater com o tipo (receita/despesa) da
-    // linha — evita salvar uma inconsistência (ex: categoria de receita
-    // numa linha marcada como despesa).
     for (const linha of linhasParaSalvar) {
         if (!linha.categoriaId) {
             UIModule.showError(`Falta escolher a categoria de "${linha.descricao}" antes de confirmar.`);
@@ -588,10 +748,6 @@ async function confirmarImportacao() {
 
         const { inseridas, duplicadasNoMomentoDeSalvar } = await salvarLoteComTratamentoDeDuplicados(payload);
 
-        // Aprendizado de Categorias: para cada linha realmente salva,
-        // grava/reforça a regra termo -> categoria, exatamente como o
-        // formulário manual já faz — assim a próxima importação (ou
-        // lançamento manual) do mesmo termo já vem pronta.
         if (typeof RegrasAprendidasModule !== 'undefined') {
             for (const linha of linhasParaSalvar) {
                 if (!linha.descricao?.trim()) continue;
@@ -612,7 +768,7 @@ async function confirmarImportacao() {
         }
         UIModule.showSuccess(mensagem);
 
-        cancelarImportacao(); // limpa a tabela/estado
+        cancelarImportacao();
         await loadClientDashboard();
     } catch (err) {
         console.error('❌ confirmarImportacao:', err);
@@ -622,16 +778,6 @@ async function confirmarImportacao() {
     }
 }
 
-/**
- * Tenta inserir todas as linhas de uma vez (rápido, 1 chamada de
- * rede). Se o Postgres rejeitar por causa da constraint UNIQUE
- * (client_id, import_hash) — código 23505 — significa que PELO MENOS
- * UMA linha do lote já existe (pode ter sido importada em outra aba,
- * ou entre o momento da checagem de duplicados e agora). Nesse caso,
- * refaz a inserção LINHA A LINHA, pulando só as que colidirem — mais
- * lento, mas só acontece nesse caso de borda; o caminho feliz (sem
- * duplicados) continua sendo uma única chamada.
- */
 async function salvarLoteComTratamentoDeDuplicados(payload) {
     try {
         const inseridas = await DatabaseModule.addTransactionsBulk(payload);
@@ -665,4 +811,4 @@ if (document.readyState === 'loading') {
     initImportacaoExtrato();
 }
 
-console.log('✅ importacao-extrato.js carregado');
+console.log('✅ importacao-extrato.js carregado (regras Nubank + selo de confiança alta/aproximada)');

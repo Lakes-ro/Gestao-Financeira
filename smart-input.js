@@ -22,64 +22,99 @@
  * A versão anterior usava, como fallback quando `/api/classify` falhava
  * (o que acontece SEMPRE hoje, porque o endpoint ainda é um placeholder
  * — ver nota abaixo), uma categoria fixa chamada "outros". Só que essa
- * categoria NUNCA existiu na tabela `categorias` (confirmado ao vivo via
- * Supabase MCP: as 18 categorias reais são Alimentação, Contas e
- * Utilidades, Educação, Moradia, Saúde, Transporte, Compras, Delivery,
- * Lazer, Streaming e Assinaturas, Viagens, Aporte em Investimentos,
- * Previdência Privada, Reserva de Emergência, Dividendos, Freelance,
- * Renda Extra, Salário — nenhuma delas se chama "Outros"). Resultado:
- * TODA descrição digitada caía no mesmo beco sem saída ("Não identifiquei
- * a categoria — selecione manualmente"), porque o fallback procurava uma
- * categoria fantasma.
+ * categoria NUNCA existiu na tabela `categorias`. Resultado: TODA
+ * descrição digitada caía no mesmo beco sem saída. A CORREÇÃO: existe
+ * um CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (`classificarLocalmente`)
+ * que já mapeia direto para categorias reais.
  *
- * A CORREÇÃO: em vez de um fallback fixo e genérico, agora existe um
- * CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (`classificarLocalmente`,
- * mesmo princípio do classificador simulado em categoria-personalizada.js)
- * que já mapeia direto para as 18 categorias REAIS acima. Isso roda
- * INSTANTANEAMENTE (sem rede) sempre que `/api/classify` não responder —
- * e é por isso que, com este arquivo, "Gasolina" já cai certinho em
- * "Transporte" mesmo sem nenhum back-end de IA existir ainda.
+ * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (SINÔNIMOS CADASTRADOS PELO
+ * ADMIN): agora existe uma fonte de classificação melhor que a
+ * heurística fixa em código: `categorias.palavras_chave` (text[]),
+ * editável pelo admin em admin.html (modal de categoria → campo
+ * "Palavras-chave / sinônimos"). Ex: a categoria "Aluguel Ganho" pode
+ * ter as palavras-chave "aluguel ganho, aluguel recebido, recebimento
+ * de aluguel, renda de aluguel" — não importa a ORDEM das palavras
+ * nem a variação de texto exata que o cliente digitar, desde que o
+ * termo cadastrado apareça (como substring, já normalizado sem
+ * acento/caixa) dentro da descrição.
+ *
+ * ATUALIZAÇÃO — MATCH BIDIRECIONAL + POR RADICAL (RESOLVE "cabelo" NÃO
+ * ACHAR "Cabeleireiro"): o match é BIDIRECIONAL (`a.includes(b) ||
+ * b.includes(a)`) e também compara contra o NOME da própria categoria,
+ * não só os sinônimos. Pra palavras com pelo menos 5 caracteres, um
+ * match de RADICAL (mesmos 5 primeiros caracteres) também conta —
+ * cobre variações de gênero/plural/conjugação da MESMA palavra
+ * (cabelo/cabeleireiro).
+ *
+ * ATUALIZAÇÃO — GRUPOS SEMÂNTICOS (RESOLVE "Unha" NÃO ACHAR
+ * "Manicure"): o match por radical só funciona quando duas palavras
+ * COMPARTILHAM TEXTO (mesmo início). Só que "Unha" e "Manicure", ou
+ * "Notebook" e "Eletrônicos", não têm NENHUMA letra em comum como
+ * string — nenhum algoritmo de substring/radical resolve isso, porque
+ * não é uma questão de TEXTO parecido, é uma questão de SIGNIFICADO
+ * parecido. A única forma honesta de resolver isso é uma lista CURADA
+ * manualmente (`GRUPOS_SEMANTICOS_CATEGORIA`, abaixo): cada grupo tem
+ * um nome de categoria "guarda-chuva" (ex: "Eletrônicos") e uma lista
+ * de itens que pertencem a ele (Celular, Smartphone, Notebook...).
+ * Quando a descrição digitada bate com um desses itens, o sistema
+ * procura se já existe uma categoria REAL cadastrada com esse nome
+ * guarda-chuva (ou parecido) e usa ela — NUNCA inventa uma categoria
+ * nova sozinho. Essa é sempre tratada como confiança APROXIMADA (pede
+ * confirmação), porque é uma inferência de significado, não um texto
+ * batendo com certeza.
+ *
+ * ATUALIZAÇÃO — CONFIANÇA DO MATCH (ALTA vs APROXIMADA):
+ * Um match por SUBSTRING (bidirecional) é ALTA confiança. Um match só
+ * por RADICAL ou por GRUPO SEMÂNTICO é confiança APROXIMADA — nesses
+ * casos: a mensagem exibida diz explicitamente "confira antes de
+ * salvar"; o texto do botão de categoria mostra "(confira)" ao lado do
+ * nome; em importacao-extrato.js, o selo da linha na tabela de revisão
+ * muda de "🔑 Sinônimo" para "🔎 Sugestão aproximada". O formulário
+ * NUNCA trava nem impede de salvar — a diferença é puramente de AVISO
+ * VISUAL, pra você saber quando vale a pena olhar com mais atenção
+ * antes de confirmar.
+ *
+ * ORDEM DE PRIORIDADE da classificação (do mais para o menos
+ * confiável), usada tanto aqui quanto em importacao-extrato.js:
+ *   1. Regra aprendida do próprio cliente (regras_aprendidas) — feito
+ *      em regras-aprendidas.js, ANTES de chamar autoClassify(). Sempre
+ *      alta confiança (o próprio cliente já confirmou essa categoria
+ *      pra esse termo antes).
+ *   2. Palavras-chave/sinônimos cadastrados pelo ADMIN em `categorias`
+ *      OU nome da própria categoria (encontrarCategoriaPorPalavraChave,
+ *      abaixo) — alta confiança se substring, aproximada se só radical.
+ *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — sempre
+ *      confiança aproximada, só entra em ação se já existir uma
+ *      categoria real com o nome guarda-chuva do grupo.
+ *   4. Endpoint /api/classify (IA real — hoje é placeholder).
+ *   5. Classificador local por palavras-chave FIXAS no código
+ *      (classificarLocalmente) — cobre termos comuns mesmo sem
+ *      nenhuma curadoria feita pelo admin ainda.
+ *   6. Nenhum match — pede seleção manual, nunca inventa uma categoria.
  *
  * ⚠️ SOBRE O ENDPOINT `/api/classify`:
- * Continua sendo um PLACEHOLDER — nenhuma mudança nisso. Quando o back-end
- * existir de verdade (idealmente uma Supabase Edge Function, pela mesma
- * razão de segurança já documentada em categoria-personalizada.js: nunca
- * embutir chave de API de LLM no JS do navegador), ele é tentado PRIMEIRO;
- * o classificador local só entra em ação se a chamada falhar ou vier
- * incompleta. Contrato esperado da resposta:
- *
- *   REQUEST  (POST, JSON): { "description": "texto digitado pelo cliente" }
- *   RESPONSE (200, JSON):  {
- *       "type":       "receita" | "despesa",
- *       "category":   "nome da categoria sugerida (string)",
- *       "group":      "essencial" | "estilo_de_vida" | "investimento" | "renda",
- *       "confidence": 0.0 a 1.0   // opcional
- *   }
+ * Continua sendo um PLACEHOLDER — nenhuma mudança nisso.
  *
  * IMPORTANTE — POR QUE NÃO INVENTAMOS UM categoria_id:
- * `transacoes.categoria_id` é uma foreign key para `categorias.id`. Nem a
- * IA (futura) nem o classificador local devolvem um UUID — devolvem um
- * NOME de categoria. Este módulo SEMPRE cruza esse nome com as categorias
- * REAIS já cadastradas no banco antes de preencher o campo oculto
+ * `transacoes.categoria_id` é uma foreign key para `categorias.id`.
+ * Este módulo SEMPRE cruza qualquer sugestão com as categorias REAIS
+ * já cadastradas no banco antes de preencher o campo oculto
  * `transCategory`. Se não achar uma correspondência confiável, ele NÃO
  * grava um id qualquer — apenas avisa o cliente para escolher manualmente.
- * Isso evita erro 23503 (FK violation) na hora de salvar a transação.
  *
- * ⚠️ SOBRE "SELECT DE TIPO":
- * O formulário de transação (client.html/index.html) NÃO tem um <select>
- * de tipo separado — o campo `transCategory` é um dropdown customizado
- * (botão + painel), e o `tipo` (receita/despesa) é derivado da categoria
- * escolhida (ver `handleAddTransaction` em app.js: `tipo: cat.tipo`).
+ * GARANTIA DURA (não depende de confiança nenhuma): o formulário só
+ * salva se `transCategory` tiver um id de categoria REAL selecionado
+ * (ver handleAddTransaction em app.js) — e, tanto no formulário manual
+ * quanto na importação, o `tipo` salvo na transação vem sempre da
+ * categoria escolhida (`cat.tipo`), nunca de uma suposição solta. Uma
+ * transação de despesa não tem como ser salva com uma categoria de
+ * receita, e vice-versa — essa checagem é uma trava dura, não uma
+ * sugestão.
  */
 
 // ══════════════════════════════════════════════════════════════
 // ESTADO DO FORMULÁRIO
 // ══════════════════════════════════════════════════════════════
-// Espelha os 4 campos que importam para a classificação/lançamento.
-// NÃO é a fonte de verdade na hora de salvar (handleAddTransaction em
-// app.js sempre lê o DOM diretamente, que é mais seguro contra
-// dessincronização) — serve para o Smart Input decidir o que já foi
-// preenchido, o que ainda falta, e para depuração/telemetria futura.
 const TransactionFormState = {
     data:          null, // 'YYYY-MM-DD'
     descricao:     '',
@@ -103,6 +138,12 @@ let smartInputPromisePendente = null; // permite ao handleAddTransaction esperar
 
 const GRUPOS_VALIDOS = ['essencial', 'estilo_de_vida', 'investimento', 'renda'];
 
+// Tamanho mínimo de palavra para entrar na regra de match por RADICAL
+// (evita falso positivo tipo "carro" casando com "carta" só porque os
+// 3 primeiros caracteres batem — com um piso de 5 caracteres, o
+// radical comparado já carrega significado suficiente).
+const RADICAL_MIN_LEN = 5;
+
 // ── Utilitários de texto (comparação tolerante a acento/caixa) ─
 function normalizarTexto(txt) {
     return (txt || '')
@@ -112,23 +153,202 @@ function normalizarTexto(txt) {
         .trim();
 }
 
+/**
+ * Compara dois textos já normalizados e devolve { match, confiancaAlta }:
+ *   - match=true, confiancaAlta=true  → um é substring do outro
+ *     (correspondência exata de texto — o nível de certeza mais alto).
+ *   - match=true, confiancaAlta=false → só bateram os primeiros
+ *     RADICAL_MIN_LEN caracteres (raiz comum) — ex: "cabelo" vs
+ *     "cabeleireiro". Provavelmente certo, mas não é garantido (duas
+ *     palavras diferentes podem começar parecido), por isso o
+ *     resultado precisa de confirmação visual antes de salvar.
+ *   - match=false → nenhuma correspondência.
+ */
+function avaliarCorrespondencia(a, b) {
+    if (!a || !b) return { match: false, confiancaAlta: false };
+    if (a.includes(b) || b.includes(a)) return { match: true, confiancaAlta: true };
+
+    const menorTamanho = Math.min(a.length, b.length);
+    if (menorTamanho < RADICAL_MIN_LEN) return { match: false, confiancaAlta: false };
+
+    const radicalBate = a.slice(0, RADICAL_MIN_LEN) === b.slice(0, RADICAL_MIN_LEN);
+    return { match: radicalBate, confiancaAlta: false };
+}
+
+// Wrapper booleano simples — usado onde só interessa saber SE bateu,
+// sem precisar do nível de confiança (ex: encontrarCategoriaCorrespondente).
+function textoContemOuEhContido(a, b) {
+    return avaliarCorrespondencia(a, b).match;
+}
+
 // ══════════════════════════════════════════════════════════════
-// CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE
+// GRUPOS SEMÂNTICOS — VÁRIOS TERMOS DIFERENTES, UMA SÓ CATEGORIA
 // ══════════════════════════════════════════════════════════════
-// Mesmo princípio do classificador simulado em categoria-personalizada.js
-// (heurística, não é uma chamada real a um LLM), mas aqui o alvo já é o
-// NOME EXATO de uma categoria real da tabela `categorias` — não apenas o
-// `grupo`. Isso garante que, mesmo sem back-end de IA, descrições comuns
-// já caiam na categoria certa imediatamente.
-//
-// Cada entrada: [regex sobre a descrição, tipo esperado, nome EXATO da
-// categoria em `categorias.nome`]. A primeira regra que bater vence.
-//
-// Se um dia as categorias do banco mudarem de nome, esta lista precisa
-// ser atualizada junto — o match final ainda protege contra isso (ver
-// encontrarCategoriaCorrespondente: se o nome não existir mais no banco,
-// cai em correspondência parcial e, na pior hipótese, pede seleção
-// manual — nunca grava um id inventado).
+/**
+ * Resolve o caso de itens que são conceitualmente a mesma coisa mas
+ * não compartilham NENHUM texto em comum (ex: "Celular" e
+ * "Smartwatch" não têm nada de parecido como string — nem match por
+ * substring nem por radical vai funcionar aqui, porque não é uma
+ * questão de TEXTO parecido, é de SIGNIFICADO parecido).
+ *
+ * Cada grupo tem um nome de categoria CANÔNICO/"guarda-chuva" (ex:
+ * "Eletrônicos") e uma lista de termos que pertencem a ele. Quando a
+ * descrição bate com um desses termos, o sistema procura se já existe
+ * uma categoria REAL cadastrada com esse nome canônico (ou algo bem
+ * parecido) e usa ela — se não existir ainda, não inventa nada, só
+ * fica disponível pra sugerir ao CRIAR uma categoria nova (ver
+ * categoria-personalizada.js).
+ *
+ * Esta lista é só um PONTO DE PARTIDA com os grupos mais comuns pra um
+ * uso pessoal/familiar — adicione mais grupos/termos aqui conforme
+ * surgirem casos parecidos no seu uso real. O padrão de cada linha é
+ * sempre o mesmo: nome canônico + tipo + grupo do BI + lista de termos
+ * (tudo minúsculo e sem acento já ajuda a leitura, mas não é
+ * obrigatório — normalizarTexto() cuida disso em tempo de execução).
+ */
+const GRUPOS_SEMANTICOS_CATEGORIA = [
+    {
+        categoria: 'Eletrônicos',
+        tipo: 'despesa',
+        grupo: 'estilo_de_vida',
+        termos: [
+            'celular', 'smartphone', 'smartwatch', 'relogio inteligente',
+            'fone de ouvido', 'fone bluetooth', 'fone sem fio', 'headset',
+            'notebook', 'laptop', 'computador', 'tablet', 'ipad',
+            'impressora', 'caixa de som', 'caixa de som portatil',
+            'video game', 'videogame', 'console', 'carregador',
+            'mouse', 'teclado', 'monitor', 'hd externo', 'pendrive'
+        ]
+    },
+    {
+        categoria: 'Beleza e Estética',
+        tipo: 'despesa',
+        grupo: 'estilo_de_vida',
+        termos: [
+            'manicure', 'pedicure', 'unha', 'maquiagem', 'sobrancelha',
+            'depilacao', 'estetica', 'spa', 'massagem', 'salao de beleza',
+            'cilios', 'design de sobrancelha', 'skincare', 'cosmetico'
+        ]
+    },
+    {
+        categoria: 'Vestuário e Calçados',
+        tipo: 'despesa',
+        grupo: 'estilo_de_vida',
+        termos: [
+            'roupa', 'sapato', 'tenis', 'calcado', 'vestido', 'camisa',
+            'camiseta', 'calca', 'jaqueta', 'casaco', 'bolsa', 'mochila',
+            'mala de viagem', 'cinto', 'meia', 'sunga', 'biquini'
+        ]
+    },
+    {
+        categoria: 'Manutenção Automotiva',
+        tipo: 'despesa',
+        grupo: 'essencial',
+        termos: [
+            'oficina', 'mecanico', 'revisao do carro', 'troca de oleo',
+            'pneu', 'alinhamento', 'balanceamento', 'bateria do carro',
+            'seguro do carro', 'ipva', 'licenciamento'
+        ]
+    }
+];
+
+/**
+ * Procura, na lista curada acima, um grupo semântico cujo termo bata
+ * com o texto digitado (substring bidirecional simples — aqui não
+ * precisa de radical, porque os termos já são curados e específicos o
+ * bastante pra não gerar falso positivo). Retorna o grupo inteiro
+ * ({ categoria, tipo, grupo, termos }) ou null.
+ */
+function encontrarGrupoSemantico(texto) {
+    const alvo = normalizarTexto(texto);
+    if (!alvo) return null;
+
+    for (const grupoSemantico of GRUPOS_SEMANTICOS_CATEGORIA) {
+        const bateu = grupoSemantico.termos.some(termo => {
+            const termoNormalizado = normalizarTexto(termo);
+            return alvo.includes(termoNormalizado) || termoNormalizado.includes(alvo);
+        });
+        if (bateu) return grupoSemantico;
+    }
+
+    return null;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PLANO DE CONTAS ROBUSTO — MATCH POR PALAVRA-CHAVE/SINÔNIMO
+// ══════════════════════════════════════════════════════════════
+/**
+ * Procura, dentre as categorias REAIS já cadastradas, alguma que
+ * reconheça a descrição digitada, em 3 passadas (da mais pra menos
+ * confiável):
+ *   1. Sinônimo cadastrado pelo admin em `palavras_chave`.
+ *   2. Nome da própria categoria.
+ *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — só entra
+ *      em ação se existir uma categoria real com o nome guarda-chuva
+ *      do grupo (ex: "Eletrônicos").
+ *
+ * Retorna a categoria encontrada com um campo extra `_confiancaAlta`
+ * (true = correspondência exata de texto; false = match aproximado —
+ * por radical OU por grupo semântico, precisa de confirmação visual).
+ * Retorna null se nada bater em nenhuma das 3 passadas.
+ */
+function encontrarCategoriaPorPalavraChave(categorias, descricao) {
+    const alvo = normalizarTexto(descricao);
+    if (!alvo || !categorias || !categorias.length) return null;
+
+    const melhorPorPassada = (fonteDeTermo) => {
+        let melhorMatch = null; // { cat, confiancaAlta }
+        for (const cat of categorias) {
+            const termos = fonteDeTermo(cat);
+            for (const termoBruto of termos) {
+                const termo = normalizarTexto(termoBruto);
+                if (!termo) continue;
+                const resultado = avaliarCorrespondencia(alvo, termo);
+                if (!resultado.match) continue;
+
+                if (resultado.confiancaAlta) {
+                    return { cat, confiancaAlta: true }; // não dá pra achar melhor que isso — encerra já
+                }
+                if (!melhorMatch) melhorMatch = { cat, confiancaAlta: false };
+            }
+        }
+        return melhorMatch;
+    };
+
+    // 1ª passada: sinônimos cadastrados pelo admin (palavras_chave)
+    const porSinonimo = melhorPorPassada(cat => Array.isArray(cat.palavras_chave) ? cat.palavras_chave : []);
+    if (porSinonimo) return { ...porSinonimo.cat, _confiancaAlta: porSinonimo.confiancaAlta };
+
+    // 2ª passada: nome da própria categoria (fallback quando não há
+    // sinônimo cadastrado ou nenhum bateu) — é aqui que "cabelo" passa
+    // a reconhecer diretamente uma categoria chamada "Cabeleireiro".
+    const porNome = melhorPorPassada(cat => [cat.nome]);
+    if (porNome) return { ...porNome.cat, _confiancaAlta: porNome.confiancaAlta };
+
+    // 3ª passada: GRUPO SEMÂNTICO — cobre itens que são a mesma coisa
+    // mas não compartilham texto nenhum (ex: "Notebook" -> categoria
+    // "Eletrônicos"). Só entra em ação se já existir uma categoria
+    // REAL cadastrada com o nome canônico do grupo (ou parecido) —
+    // nunca inventa uma categoria. Sempre confiança aproximada, mesmo
+    // que o nome da categoria bata exato — é uma inferência de
+    // significado, não um texto batendo com certeza.
+    const grupoSemantico = encontrarGrupoSemantico(alvo);
+    if (grupoSemantico) {
+        const nomeCanonico = normalizarTexto(grupoSemantico.categoria);
+        const categoriaCanonica = categorias.find(c =>
+            c.tipo === grupoSemantico.tipo && textoContemOuEhContido(normalizarTexto(c.nome), nomeCanonico)
+        );
+        if (categoriaCanonica) {
+            return { ...categoriaCanonica, _confiancaAlta: false };
+        }
+    }
+
+    return null;
+}
+
+// ══════════════════════════════════════════════════════════════
+// CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (heurística fixa no código)
+// ══════════════════════════════════════════════════════════════
 const REGRAS_CLASSIFICACAO_LOCAL = [
     // ── Receitas (renda) ──
     [/sal[aá]rio|holerite|pr[oó]-labore/i,                          'receita', 'Salário'],
@@ -149,21 +369,18 @@ const REGRAS_CLASSIFICACAO_LOCAL = [
     [/farm[aá]cia|m[eé]dico|consulta|plano de sa[uú]de|hospital|dentista|rem[eé]dio/i, 'despesa', 'Saúde'],
     [/escola|faculdade|curso|mensalidade|material escolar|livro did[aá]tico/i, 'despesa', 'Educação'],
     [/[oô]nibus|uber|99\b|combust[ií]vel|gasolina|posto|estacionamento|pedagio|pedágio|metr[oô]|passagem de [oô]nibus/i, 'despesa', 'Transporte'],
+    [/oficina|mec[aâ]nico|revis[aã]o do carro|troca de [oó]leo|pneu|alinhamento|balanceamento/i, 'despesa', 'Manutenção Automotiva'],
 
     // ── Estilo de vida ──
     [/restaurante|ifood|delivery|lanche|lanchonete|pizza|hamb[uú]rguer|bar\b/i, 'despesa', 'Delivery'],
     [/streaming|netflix|spotify|assinatura/i,                       'despesa', 'Streaming e Assinaturas'],
     [/viagem|hotel|passagem|airbnb/i,                                'despesa', 'Viagens'],
     [/shopping|roupa|cal[çc]ado|compra/i,                            'despesa', 'Compras'],
-    [/cinema|show|festa|balada|lazer/i,                              'despesa', 'Lazer'],
+    [/cinema|show|festa|balada|lazer|cabel[eo]/i,                    'despesa', 'Lazer'],
+    [/celular|smartphone|notebook|tablet|fone de ouvido|video ?game/i, 'despesa', 'Eletrônicos'],
+    [/manicure|pedicure|unha|maquiagem|sobrancelha|estetica/i,      'despesa', 'Beleza e Estética'],
 ];
 
-/**
- * Roda a heurística local sobre a descrição digitada. Retorna o mesmo
- * formato que o endpoint de IA retornaria (para que o resto do fluxo
- * trate os dois casos de forma idêntica), com `fallback: true` e
- * `local: true` para indicar a origem.
- */
 function classificarLocalmente(descricao) {
     const regra = REGRAS_CLASSIFICACAO_LOCAL.find(([regex]) => regex.test(descricao));
 
@@ -181,15 +398,6 @@ function classificarLocalmente(descricao) {
 // ══════════════════════════════════════════════════════════════
 // SMART DATE
 // ══════════════════════════════════════════════════════════════
-
-/**
- * Retorna a data de HOJE no fuso horário local, já no formato exigido
- * pelo <input type="date">: 'YYYY-MM-DD'. Usar toISOString() puro é
- * um erro comum aqui — ele converte para UTC e pode "voltar" um dia
- * dependendo da hora e do fuso do utilizador. Por isso montamos a
- * string manualmente a partir de getFullYear/getMonth/getDate (todos
- * em hora LOCAL).
- */
 function getDataDeHojeFormatoInput() {
     const agora = new Date();
     const ano   = agora.getFullYear();
@@ -198,18 +406,6 @@ function getDataDeHojeFormatoInput() {
     return `${ano}-${mes}-${dia}`;
 }
 
-/**
- * Preenche o campo de data com a data de hoje — mas SÓ se o campo
- * estiver vazio. Isso permite chamar setSmartDate() várias vezes (ex:
- * toda vez que a aba "Transações" é aberta) sem apagar uma data que o
- * cliente já tenha alterado manualmente para um lançamento retroativo
- * ou futuro que ainda não foi enviado.
- *
- * @param {boolean} forcar - se true, sobrescreve mesmo se já tiver valor
- *                            (usado depois de um Registar bem-sucedido,
- *                            quando o formulário é resetado e precisa
- *                            voltar a ter a data de hoje pronta).
- */
 function setSmartDate(forcar = false) {
     const campoData = document.getElementById('transDate');
     if (!campoData) return;
@@ -238,32 +434,25 @@ async function getCategoriasParaClassificacao(forcarRecarga = false) {
     return smartInputCategoriasCache;
 }
 
-/**
- * Tenta encontrar, dentre as categorias REAIS já cadastradas no banco,
- * a que melhor corresponde ao nome sugerido + o tipo esperado. NUNCA
- * retorna algo que não exista de fato em `categorias` — se não achar
- * nada confiável, retorna null (e quem chama trata isso como "precisa
- * de seleção manual").
- */
 function encontrarCategoriaCorrespondente(categorias, nomeSugerido, tipoSugerido) {
     if (!categorias || !categorias.length) return null;
     const nomeAlvo = normalizarTexto(nomeSugerido);
 
-    // 1) Match exato de nome + tipo
     let match = categorias.find(c =>
         c.tipo === tipoSugerido && normalizarTexto(c.nome) === nomeAlvo
     );
     if (match) return match;
 
-    // 2) Match parcial (nome sugerido contém ou está contido no nome da categoria) + tipo bate
+    // Match bidirecional + radical (mesma lógica de
+    // encontrarCategoriaPorPalavraChave) — cobre variações entre o
+    // nome sugerido pela IA/classificador local e o nome real
+    // cadastrado (ex: sugestão "Cabelo" vs categoria "Cabeleireiro").
     match = categorias.find(c => {
         if (c.tipo !== tipoSugerido) return false;
-        const nomeCat = normalizarTexto(c.nome);
-        return nomeCat.includes(nomeAlvo) || nomeAlvo.includes(nomeCat);
+        return textoContemOuEhContido(nomeAlvo, normalizarTexto(c.nome));
     });
     if (match) return match;
 
-    // 3) Nenhuma correspondência confiável — não inventa nada
     return null;
 }
 
@@ -299,13 +488,6 @@ function marcarOpcaoSelecionadaNoPainel(categoriaId) {
         ?.classList.add('selected');
 }
 
-/**
- * Aplica o resultado da classificação (via IA real ou via classificador
- * local) nos campos do formulário. Preenche mas NÃO bloqueia edição
- * manual — o cliente sempre pode reabrir o dropdown e trocar a
- * categoria sugerida. É esse comportamento que evita o problema de "IA
- * que erra e trava o usuário": o sistema sugere, nunca impõe.
- */
 async function preencherFormularioComClassificacao(resultado) {
     const hiddenInput = document.getElementById('transCategory');
     if (!hiddenInput) return;
@@ -316,15 +498,24 @@ async function preencherFormularioComClassificacao(resultado) {
     if (match) {
         hiddenInput.value = match.id;
         marcarOpcaoSelecionadaNoPainel(match.id);
-        setSmartInputEstadoVisual('sugestao', match.nome);
+
+        // Confiança aproximada (radical OU grupo semântico) — o texto
+        // do botão já avisa "(confira)" ao lado do nome, pra não passar
+        // despercebido mesmo se a pessoa não ler a mensagem toast.
+        const nomeExibido = resultado.confiancaAlta === false ? `${match.nome} (confira)` : match.nome;
+        setSmartInputEstadoVisual('sugestao', nomeExibido);
 
         TransactionFormState.tipo          = match.tipo;
         TransactionFormState.categoriaId   = match.id;
         TransactionFormState.categoriaNome = match.nome;
 
-        if (resultado.local) {
-            // Classificador local (heurística por palavra-chave) — não é
-            // IA de verdade, mas já resolve os casos comuns hoje.
+        if (resultado.palavraChave) {
+            if (resultado.confiancaAlta === false) {
+                UIModule.showMessage(`🔎 Sugestão por semelhança: ${match.nome} — confira antes de salvar`, 'info', 4500);
+            } else {
+                UIModule.showMessage(`🔑 Categoria reconhecida por sinônimo: ${match.nome}`, 'success', 2500);
+            }
+        } else if (resultado.local) {
             UIModule.showMessage(`🤖 Categoria sugerida: ${match.nome}`, 'success', 2500);
         } else if (resultado.fallback) {
             UIModule.showMessage(
@@ -336,16 +527,10 @@ async function preencherFormularioComClassificacao(resultado) {
             UIModule.showMessage(`🤖 Categoria sugerida: ${match.nome}`, 'success', 2500);
         }
 
-        // Vínculo com Meta/Caixinha (app.js): reavalia se a categoria
-        // preenchida automaticamente é do grupo 'investimento' e, se
-        // for, mostra o seletor de meta. Guarda por typeof porque
-        // smart-input.js não depende de app.js estar carregado.
         if (typeof atualizarSeletorDeMeta === 'function') {
             atualizarSeletorDeMeta('transCategory', 'transMetaWrapper', 'transMeta');
         }
     } else {
-        // Nenhuma categoria real corresponde ao que foi sugerido — NÃO
-        // grava um id inválido. Limpa o campo e pede seleção manual.
         hiddenInput.value = '';
         setSmartInputEstadoVisual('sem-match');
 
@@ -360,33 +545,23 @@ async function preencherFormularioComClassificacao(resultado) {
 // ══════════════════════════════════════════════════════════════
 // AUTOCLASSIFY — núcleo do Smart Input
 // ══════════════════════════════════════════════════════════════
-
 /**
- * Recebe a descrição digitada pelo cliente e tenta classificar tipo +
- * categoria automaticamente. Ordem de tentativa:
- *   1. Endpoint /api/classify (IA real — hoje é placeholder, então
- *      falha sempre, e isso é esperado até existir um back-end).
- *   2. Classificador local por palavras-chave (instantâneo, mapeado às
- *      categorias reais do banco — ver REGRAS_CLASSIFICACAO_LOCAL).
- *   3. Se nem isso reconhecer a descrição, o formulário pede seleção
- *      manual honestamente (nunca inventa uma categoria).
- *
- * Assíncrona, tolerante a falhas de rede/endpoint — nunca trava o
- * botão Registar.
- *
- * @param {string} description
- * @returns {Promise<{tipo, categoriaNome, fallback, local}|null>}
+ * Ordem de tentativa (ver nota completa no cabeçalho do arquivo):
+ *   1. Palavras-chave/sinônimos/nome/grupo semântico (todos dentro de
+ *      encontrarCategoriaPorPalavraChave), com distinção de confiança
+ *      alta vs aproximada.
+ *   2. Endpoint /api/classify (placeholder).
+ *   3. Classificador local por palavras-chave fixas no código.
+ *   4. Nenhum match — seleção manual.
  */
 async function autoClassify(description) {
     const descricao = (description || '').trim();
     TransactionFormState.descricao = descricao;
 
-    // Guarda: descrição vazia ou curta demais — nem vale a pena classificar
     if (descricao.length < 3) {
         return null;
     }
 
-    // Evita reclassificar o mesmo texto duas vezes seguidas
     if (descricao === smartInputUltimaDescricao) {
         return null;
     }
@@ -396,46 +571,61 @@ async function autoClassify(description) {
 
         let resultado = null;
 
-        // 1) Tenta o endpoint de IA real (placeholder por enquanto)
-        try {
-            const response = await fetch('/api/classify', {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ description: descricao })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Endpoint /api/classify retornou HTTP ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            const tipoValido     = data?.type === 'receita' || data?.type === 'despesa';
-            const grupoValido    = GRUPOS_VALIDOS.includes(data?.group);
-            const categoriaOk    = typeof data?.category === 'string' && data.category.trim().length > 0;
-            const confiancaBaixa = typeof data?.confidence === 'number' && data.confidence < 0.4;
-
-            if (!tipoValido || !grupoValido || !categoriaOk || confiancaBaixa) {
-                throw new Error('Resposta da IA incompleta ou de baixa confiança.');
-            }
-
+        // 1) Palavras-chave/sinônimos/nome/grupo semântico
+        const categoriasDisponiveis = await getCategoriasParaClassificacao();
+        const categoriaPorSinonimo  = encontrarCategoriaPorPalavraChave(categoriasDisponiveis, descricao);
+        if (categoriaPorSinonimo) {
             resultado = {
-                tipo:          data.type,
-                categoriaNome: data.category.trim(),
+                tipo:          categoriaPorSinonimo.tipo,
+                categoriaNome: categoriaPorSinonimo.nome,
                 fallback:      false,
-                local:         false
+                local:         false,
+                palavraChave:  true,
+                confiancaAlta: categoriaPorSinonimo._confiancaAlta
             };
-        } catch (err) {
-            console.warn('⚠️ /api/classify indisponível, tentando classificador local:', err.message);
         }
 
-        // 2) Endpoint falhou (ou ainda não existe) — tenta o classificador local
+        // 2) Tenta o endpoint de IA real (placeholder por enquanto)
+        if (!resultado) {
+            try {
+                const response = await fetch('/api/classify', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ description: descricao })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Endpoint /api/classify retornou HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                const tipoValido     = data?.type === 'receita' || data?.type === 'despesa';
+                const grupoValido    = GRUPOS_VALIDOS.includes(data?.group);
+                const categoriaOk    = typeof data?.category === 'string' && data.category.trim().length > 0;
+                const confiancaBaixa = typeof data?.confidence === 'number' && data.confidence < 0.4;
+
+                if (!tipoValido || !grupoValido || !categoriaOk || confiancaBaixa) {
+                    throw new Error('Resposta da IA incompleta ou de baixa confiança.');
+                }
+
+                resultado = {
+                    tipo:          data.type,
+                    categoriaNome: data.category.trim(),
+                    fallback:      false,
+                    local:         false
+                };
+            } catch (err) {
+                console.warn('⚠️ /api/classify indisponível, tentando classificador local:', err.message);
+            }
+        }
+
+        // 3) Endpoint falhou (ou ainda não existe) — tenta o classificador local
         if (!resultado) {
             resultado = classificarLocalmente(descricao);
         }
 
-        // 3) Nada reconheceu a descrição — não inventa nada, formulário
-        //    honestamente pede seleção manual.
+        // 4) Nada reconheceu a descrição — não inventa nada
         if (!resultado) {
             setSmartInputEstadoVisual('sem-match');
             TransactionFormState.tipo          = null;
@@ -456,19 +646,10 @@ async function autoClassify(description) {
     return resultadoFinal;
 }
 
-// Alias retrocompatível — nome usado anteriormente em app.js. Mantido
-// para não exigir mudanças em outras partes do código; ambos os nomes
-// apontam para a mesma função.
 async function autoClassifyTransaction(description) {
     return autoClassify(description);
 }
 
-/**
- * Usado por handleAddTransaction (app.js) para garantir que, se o
- * cliente clicar em "Registar" enquanto uma classificação ainda está
- * em andamento (ex: clicou muito rápido após sair do campo descrição),
- * o formulário espera o resultado antes de validar a categoria.
- */
 async function aguardarClassificacaoSmartInputPendente() {
     if (smartInputPromisePendente) {
         try { await smartInputPromisePendente; } catch (_) { /* já tratado internamente */ }
@@ -478,16 +659,11 @@ async function aguardarClassificacaoSmartInputPendente() {
 // ══════════════════════════════════════════════════════════════
 // SINCRONIZAÇÃO DO ESTADO COM O DOM (data, descrição, categoria)
 // ══════════════════════════════════════════════════════════════
-// Mantém TransactionFormState atualizado conforme o cliente digita ou
-// escolhe algo manualmente — não só quando a classificação automática
-// roda. Isso é só para leitura/depuração; handleAddTransaction (app.js)
-// continua lendo o DOM diretamente na hora de salvar, que é a fonte
-// de verdade.
 
 let smartInputSincronizacaoLigada = false;
 
 function ligarSincronizacaoDeEstado() {
-    if (smartInputSincronizacaoLigada) return; // evita listeners duplicados
+    if (smartInputSincronizacaoLigada) return;
     smartInputSincronizacaoLigada = true;
 
     const campoData = document.getElementById('transDate');
@@ -500,10 +676,6 @@ function ligarSincronizacaoDeEstado() {
         TransactionFormState.descricao = campoDescricao.value;
     });
 
-    // Delegação: qualquer clique numa opção do painel de categoria
-    // (seja a classificação automática que preencheu, seja o próprio
-    // cliente escolhendo manualmente em app.js/ligarCliquesDoPainel)
-    // atualiza o estado.
     const panel = document.getElementById('transCategoryPanel');
     panel?.addEventListener('click', async (e) => {
         const opcao = e.target.closest('.custom-select__option');
@@ -522,23 +694,6 @@ function ligarSincronizacaoDeEstado() {
 // INITFORM — ponto de entrada do módulo
 // ══════════════════════════════════════════════════════════════
 
-/**
- * Prepara o formulário de transação:
- *   - injeta a data de hoje no campo de data (Smart Date), sem
- *     sobrescrever se o cliente já tiver alterado manualmente;
- *   - liga o gatilho do Smart Input (classifica ao sair do campo
- *     Descrição);
- *   - liga a sincronização de estado (data/descricao/tipo/categoria).
- *
- * Pode ser chamada mais de uma vez com segurança (idempotente): ao
- * carregar a página, ao abrir a aba "Transações", e depois de um
- * Registar bem-sucedido (nesse caso com forcarData=true, porque o
- * formulário acabou de ser resetado e a data precisa voltar a ser
- * preenchida para o próximo lançamento).
- *
- * @param {boolean} forcarData - true para sobrescrever mesmo se já
- *                                houver valor (usado após reset()).
- */
 function initForm(forcarData = false) {
     setSmartDate(forcarData);
 
@@ -548,13 +703,6 @@ function initForm(forcarData = false) {
             const valor = campoDescricao.value.trim();
             if (!valor) return;
 
-            // Aprendizado de Categorias (regras-aprendidas.js): se o
-            // módulo estiver carregado, ele consulta primeiro se já existe
-            // uma regra aprendida para este termo + cliente, e só recorre
-            // à classificação (IA/heurística local) se não encontrar
-            // nada. Guarda por `typeof` para que o formulário continue
-            // funcionando (100% via IA/heurística, sem memória) mesmo que
-            // regras-aprendidas.js não esteja presente na página.
             if (typeof registerTransaction === 'function' && typeof ClientModule !== 'undefined') {
                 registerTransaction({ clienteId: ClientModule.getClientId(), descricao: valor });
             } else {
@@ -573,4 +721,4 @@ if (document.readyState === 'loading') {
     initForm(false);
 }
 
-console.log('✅ smart-input.js carregado (Smart Date + Smart Input + classificador local)');
+console.log('✅ smart-input.js carregado (Smart Date + Smart Input + sinônimos + radical + grupos semânticos)');

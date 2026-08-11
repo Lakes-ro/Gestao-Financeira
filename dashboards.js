@@ -2,42 +2,38 @@
  * DASHBOARDS.JS — Módulo: Dashboards dos Clientes (admin.html)
  * Padrão: script global. Sem import/export.
  * Depende de: supabaseClient, allClientes, loadAllClientes,
- *             openModal, showToast, formatCurrency (admin.js)
+ *             openModal, closeModal, showToast, formatCurrency
+ *             (admin.js), calcularDRE/renderDRE/calcularBalancete/
+ *             renderBalancete/exportarParaPDF/abrirBalanceteAmpliado
+ *             (contabilidade.js — carregado ANTES deste ficheiro).
  *
- * MIGRAÇÃO DE SCHEMA (auditoria via Supabase MCP — confirmado ao
- * vivo no banco, não suposição): todo este módulo usava
- * `plano_de_contas`, mas essa tabela tem RLS que só libera leitura
- * para o admin dono do `client_id` referenciado — e nunca tinha
- * sido populada. A tabela correta, com RLS liberado para leitura
- * autenticada e já populada com 18 categorias reais, é `categorias`
- * (colunas: nome, tipo, grupo — onde grupo ∈ {essencial,
- * estilo_de_vida, investimento, renda}).
- *
- * ISSO MUDA UMA REGRA DE NEGÓCIO: `categorias` não distingue renda
- * ativa de passiva (só existe o valor 'renda' para receitas) — o
- * antigo `plano_de_contas.tipo_renda` não tem equivalente aqui. Por
- * isso a classificação de risco, que dependia da cobertura de renda
- * passiva, foi REESCRITA para usar saldo + taxa de poupança (ambos
- * calculáveis com os dados reais que existem hoje). Se no futuro
- * `categorias` ganhar uma forma de marcar renda passiva, dá para
- * reintroduzir a cobertura como critério adicional.
- *
- * NOVO bucket 'investimento' (aportes/reserva/previdência) não
- * existia no modelo antigo — agora aparece como métrica própria,
- * nem essencial nem estilo de vida.
+ * ATUALIZAÇÃO — ABAS DRE / BALANCETE NO MODAL "VER DASHBOARD":
+ * O modal de dashboard de cada cliente (aberto pelo botão "📊 Ver
+ * Dashboard" na grade de clientes) agora tem 3 abas: Resumo (o que já
+ * existia: KPIs + gráficos + análise detalhada, tudo INTACTO), DRE
+ * (Demonstração do Resultado) e Balancete (Balancete de Verificação).
+ * `dashboardContextoAtual` guarda as transações e o nome do cliente do
+ * dashboard aberto no momento — usado pelos botões de exportar PDF e
+ * pelo Balancete Ampliado (contabilidade.js), evitando refazer a
+ * consulta ao banco pra cada uma dessas ações.
  */
 
 let chartDonut = null;
 let chartBar   = null;
 
+// Contexto do dashboard atualmente aberto no modal — alimenta as abas
+// DRE/Balancete, os botões "Exportar PDF" e o Balancete Ampliado
+// (ver contabilidade.js) sem precisar reconsultar o banco.
+let dashboardContextoAtual = { transacoes: [], clienteNome: '' };
+
 function initDashboards() {
   window.addEventListener('section:change', ({ detail }) => {
     if (detail.section === 'dashboards') renderDashboards();
   });
+  initModalDashboardTabs();
   renderDashboards();
 }
 
-// ── Renderiza grid com selo de risco ──────────────────────────
 async function renderDashboards() {
   const grid = document.getElementById('dashboards-grid');
   if (!grid) return;
@@ -78,7 +74,6 @@ async function renderDashboards() {
   });
 }
 
-// ── Cálculo de risco por cliente (query única, em lote) ───────
 async function calcularRiscosPorCliente(clienteIds) {
   const riscos = {};
   clienteIds.forEach(id => { riscos[id] = classificarRisco([]); });
@@ -108,23 +103,18 @@ async function calcularRiscosPorCliente(clienteIds) {
   return riscos;
 }
 
-/**
- * Regra de classificação de risco (critério de negócio nosso, não
- * vem do banco; ajustável a qualquer momento se quiser outro corte):
- *
- *  🔴 Risco Alto → saldo (receita - despesa) negativo
- *  🟡 Atenção    → saldo positivo, mas taxa de poupança < 10%
- *  🟢 Saudável   → saldo positivo e taxa de poupança >= 10%
- *  ⚪ Sem dados  → cliente ainda sem transações lançadas
- */
 function classificarRisco(transacoes) {
-  if (!transacoes.length) {
+  // Transferências internas não são receita nem despesa de verdade —
+  // excluídas antes de qualquer cálculo (mesma regra do resto do app).
+  const semTransferencias = transacoes.filter(t => t.categorias?.grupo !== 'transferencia');
+
+  if (!semTransferencias.length) {
     return { classe: 'cinza', emoji: '⚪', label: 'Sem dados' };
   }
 
   let totalReceita = 0, totalDespesa = 0;
 
-  transacoes.forEach(t => {
+  semTransferencias.forEach(t => {
     const valor = Math.abs(parseFloat(t.valor) || 0);
     if (t.tipo === 'receita') totalReceita += valor;
     else                      totalDespesa += valor;
@@ -138,13 +128,20 @@ function classificarRisco(transacoes) {
   return                          { classe: 'verde',    emoji: '🟢', label: 'Saudável'   };
 }
 
-// ── Modal: dashboard individual do cliente ────────────────────
 async function abrirDashboard(clienteId, nome) {
   document.getElementById('modal-dashboard-title').textContent = `📊 Dashboard: ${nome}`;
   ['kpi-sobrevivencia','kpi-estilo','kpi-investimentos','kpi-poupanca'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = '...';
   });
+
+  // Sempre volta pra aba "Resumo" ao abrir um novo cliente, e limpa o
+  // conteúdo anterior de DRE/Balancete (evita mostrar por um instante
+  // os números do cliente anterior enquanto a consulta nova carrega).
+  ativarAbaModalDashboard('resumo');
+  document.getElementById('dre-container').innerHTML = '<p class="empty-state">Carregando...</p>';
+  document.getElementById('balancete-container').innerHTML = '<p class="empty-state">Carregando...</p>';
+
   openModal('modal-dashboard');
 
   if (chartDonut) { chartDonut.destroy(); chartDonut = null; }
@@ -157,12 +154,22 @@ async function abrirDashboard(clienteId, nome) {
     .order('data_competencia', { ascending: false });
 
   if (error) { showToast('Erro ao carregar dados: ' + error.message, 'error'); return; }
+
+  dashboardContextoAtual = { transacoes: transacoes || [], clienteNome: nome };
+
   calcularEExibir(transacoes || []);
+  renderizarDREEBalanceteNoModal(transacoes || [], nome);
 }
 
 function calcularEExibir(transacoes) {
-  const receitas = transacoes.filter(t => t.tipo === 'receita');
-  const despesas = transacoes.filter(t => t.tipo === 'despesa');
+  // Transferências internas (grupo 'transferencia') não são receita
+  // nem despesa de verdade — dinheiro só mudou de lugar. Filtradas
+  // FORA antes de qualquer cálculo, para não inflar nem distorcer
+  // nenhuma métrica abaixo (mesma regra do dashboard.js do cliente).
+  const semTransferencias = transacoes.filter(t => t.categorias?.grupo !== 'transferencia');
+
+  const receitas = semTransferencias.filter(t => t.tipo === 'receita');
+  const despesas = semTransferencias.filter(t => t.tipo === 'despesa');
 
   const totalReceita = receitas.reduce((s, t) => s + Math.abs(t.valor), 0);
   const totalDespesa = despesas.reduce((s, t) => s + Math.abs(t.valor), 0);
@@ -175,13 +182,21 @@ function calcularEExibir(transacoes) {
     .filter(t => t.categorias?.grupo === 'investimento')
     .reduce((s, t) => s + Math.abs(t.valor), 0);
 
-  const estiloDeVida = Math.max(0, totalDespesa - custoSobrevivencia - aportesInvestimento);
+  // Dívidas e Financiamentos: isolado do Custo Essencial e do Estilo
+  // de Vida — pagar um empréstimo não é a mesma coisa que sobrevivência
+  // nem lazer, e misturar os dois distorce as duas métricas.
+  const custoDivida = despesas
+    .filter(t => t.categorias?.grupo === 'divida')
+    .reduce((s, t) => s + Math.abs(t.valor), 0);
+
+  const estiloDeVida = Math.max(0, totalDespesa - custoSobrevivencia - aportesInvestimento - custoDivida);
   const saldo        = totalReceita - totalDespesa;
   const taxaPoupanca  = totalReceita > 0 ? Math.max(0, (saldo / totalReceita) * 100) : 0;
 
   document.getElementById('kpi-sobrevivencia').textContent  = formatCurrency(custoSobrevivencia);
   document.getElementById('kpi-estilo').textContent         = formatCurrency(estiloDeVida);
   document.getElementById('kpi-investimentos').textContent  = formatCurrency(aportesInvestimento);
+  document.getElementById('kpi-dividas').textContent         = formatCurrency(custoDivida);
   document.getElementById('kpi-poupanca').textContent       = taxaPoupanca.toFixed(1) + '%';
 
   renderDonut(custoSobrevivencia, estiloDeVida, aportesInvestimento);
@@ -194,7 +209,7 @@ function calcularEExibir(transacoes) {
   const topCats = Object.entries(categoriaMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
   renderBarChart(topCats);
 
-  renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, transacoes.length);
+  renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, custoDivida, semTransferencias.length);
 }
 
 function renderDonut(essencial, estiloVida, investimento) {
@@ -241,7 +256,7 @@ function renderBarChart(topCats) {
   });
 }
 
-function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, totalTransacoes) {
+function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, custoDivida, totalTransacoes) {
   const grid = document.getElementById('analise-grid');
   if (!grid) return;
   const saldo        = totalReceita - totalDespesa;
@@ -252,6 +267,7 @@ function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeV
     { label: 'Custo Essencial',   value: formatCurrency(custoSobrevivencia),  color: '#f5d623' },
     { label: 'Estilo de Vida',    value: formatCurrency(estiloDeVida),        color: '#ff6384' },
     { label: 'Investimentos',     value: formatCurrency(aportesInvestimento), color: '#00f5a0' },
+    { label: 'Dívidas',           value: formatCurrency(custoDivida),         color: '#ff9f40' },
     { label: 'Despesa Total',     value: formatCurrency(totalDespesa),        color: '#ff4d6d' },
     { label: 'Saldo',             value: formatCurrency(saldo),               color: saldo >= 0 ? '#00f5a0' : '#ff4d6d' },
     { label: 'Taxa de Poupança',  value: taxaEconomia + '%',                  color: '#7b96ff' },
@@ -266,4 +282,62 @@ function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeV
   `).join('');
 }
 
-console.log('✅ dashboards.js carregado');
+// ══════════════════════════════════════════════════════════════
+// ABAS DO MODAL "VER DASHBOARD" — Resumo / DRE / Balancete
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Monta a DRE e o Balancete do cliente cujo dashboard acabou de abrir,
+ * usando as mesmas transações já buscadas em abrirDashboard() — sem
+ * nenhuma consulta extra ao banco. As funções calcularDRE/renderDRE/
+ * calcularBalancete/renderBalancete vêm de contabilidade.js.
+ */
+function renderizarDREEBalanceteNoModal(transacoes, nomeCliente) {
+  const periodoLabel = 'Todos os lançamentos';
+
+  if (typeof calcularDRE === 'function' && typeof renderDRE === 'function') {
+    const dre = calcularDRE(transacoes);
+    renderDRE(document.getElementById('dre-container'), dre, { clienteNome: nomeCliente, periodoLabel });
+  }
+
+  if (typeof calcularBalancete === 'function' && typeof renderBalancete === 'function') {
+    const balancete = calcularBalancete(transacoes);
+    renderBalancete(document.getElementById('balancete-container'), balancete, { clienteNome: nomeCliente, periodoLabel });
+  }
+}
+
+function ativarAbaModalDashboard(nomeAba) {
+  document.querySelectorAll('.modal-dashboard__tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === nomeAba);
+  });
+  document.querySelectorAll('.modal-dashboard__tab-content').forEach(c => {
+    c.classList.toggle('active', c.id === `tab-${nomeAba}`);
+  });
+}
+
+/**
+ * Liga os cliques das abas (Resumo/DRE/Balancete) e dos botões de
+ * exportar PDF / ampliar balancete — chamada uma única vez, dentro de
+ * initDashboards(), porque os elementos do modal são estáticos no
+ * HTML (não são recriados a cada abertura, só o CONTEÚDO interno é
+ * regenerado por abrirDashboard()).
+ */
+function initModalDashboardTabs() {
+  document.querySelectorAll('.modal-dashboard__tab').forEach(tab => {
+    tab.addEventListener('click', () => ativarAbaModalDashboard(tab.dataset.tab));
+  });
+
+  document.getElementById('btn-exportar-dre')?.addEventListener('click', () => {
+    exportarParaPDF('dre-container', `DRE — ${dashboardContextoAtual.clienteNome}`);
+  });
+
+  document.getElementById('btn-exportar-balancete')?.addEventListener('click', () => {
+    exportarParaPDF('balancete-container', `Balancete de Verificação — ${dashboardContextoAtual.clienteNome}`);
+  });
+
+  document.getElementById('btn-ampliar-balancete')?.addEventListener('click', () => {
+    if (typeof abrirBalanceteAmpliado === 'function') abrirBalanceteAmpliado();
+  });
+}
+
+console.log('✅ dashboards.js carregado (Resumo + DRE + Balancete)');
