@@ -1,41 +1,4 @@
-/* ============================================================
-   GESTOR FINANCEIRO PRO — admin.css
-   Design System Darktech — Painel do Administrador
-   CSS Variables definidas aqui. Mobile: sidebar → bottom navbar.
 
-   ATUALIZAÇÃO — PILLS DE PERÍODO (Razonete): .razonete-periodo-pills
-   e .razonete-periodo-pill, filtro rápido de período (Hoje/Ontem/
-   7 dias/Este mês/Mês passado/Tudo) acima dos filtros de Cliente/Tipo.
-
-   ATUALIZAÇÃO — CORREÇÃO DO "VAZAMENTO" DO risk-badge (ATENÇÃO/SEM
-   DADOS) NOS CARDS DE "Dashboards dos Clientes":
-   O container de nome+email dentro de .card-header-row (o <div> que
-   embrulha .card-name/.card-sub) não tinha min-width:0. Em flexbox,
-   por padrão um item nunca encolhe abaixo do tamanho do seu próprio
-   conteúdo (min-width:auto) — então um nome/email compridos (ex:
-   "Roger Hugo Mendonça de Almeida" + e-mail longo) empurravam a linha
-   inteira para além da largura do card, fazendo o .risk-badge (que já
-   tinha flex-shrink:0) "vazar" visualmente para fora da borda do
-   cartão, cortado pelo overflow. Corrigido com min-width:0 no
-   container do nome + quebra de palavra no nome/e-mail + flex-wrap no
-   header-row como rede de segurança para nomes realmente extremos.
-
-   ATUALIZAÇÃO — CONTABILIDADE (DRE, BALANCETE, PLANO DE CONTAS):
-   Adicionados estilos para:
-     - .modal-dashboard__tabs / .modal-dashboard__tab-content: abas
-       Resumo/DRE/Balancete dentro do modal "Ver Dashboard".
-     - .dre-* / .balancete-*: tabelas da Demonstração do Resultado e
-       do Balancete de Verificação.
-     - .plano-contas-secao*: agrupamento por seção contábil na grade
-       de Categorias (admin.html/categorias.js).
-     - .modal-ampliado* / .toolbar-*: modal em tela cheia do Balancete
-       Ampliado, com zoom e ferramentas de anotação (caneta/texto/
-       borracha) desenhando num canvas por cima da tabela real.
-     - @media print: impressão/"Exportar PDF" via diálogo nativo do
-       navegador, tanto pra DRE/Balancete quanto pro Balancete
-       Ampliado (já com as anotações desenhadas).
-   Nada do que já existia foi removido — só adições.
-   ============================================================ */
 
 /* ── Variáveis do Design System ─────────────────────────────── */
 :root {
@@ -275,8 +238,6 @@
   flex-direction: column;
   gap: 0.75rem;
   transition: border-color var(--transition);
-  /* Rede de segurança: nada dentro do card (badges, textos longos)
-     deve conseguir ultrapassar visualmente a borda do cartão. */
   overflow: hidden;
 }
 
@@ -302,16 +263,9 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.75rem;
-  /* Rede de segurança extra para nomes/e-mails muito longos: o badge
-     pode quebrar pra linha de baixo em vez de forçar overflow. */
   flex-wrap: wrap;
 }
 
-/* CORREÇÃO DO VAZAMENTO: este é o container de nome+e-mail (o
-   primeiro filho direto de .card-header-row). Sem min-width:0, um
-   item flex nunca encolhe abaixo da largura do seu conteúdo — um
-   nome ou e-mail comprido empurrava o .risk-badge pra fora da borda
-   visível do card. */
 .card-header-row > div:first-child {
   min-width: 0;
   flex: 1 1 auto;
@@ -385,6 +339,13 @@
 .btn-card.ver-dashboard:hover { background: rgba(66,99,235,0.22); }
 .btn-card.confirmar     { background: rgba(0,245,160,0.14);  border-color: rgba(0,245,160,0.35);  color: var(--accent-primary); }
 .btn-card.confirmar:hover { background: rgba(0,245,160,0.26); }
+
+/* Mesclar categorias — cor roxa, deliberadamente diferente de
+   editar/deletar/confirmar (é uma ação destrutiva-mas-útil: apaga a
+   origem, mas só depois de mover tudo pra outra categoria já
+   existente — não é a mesma coisa que "Deletar" puro). */
+.btn-card.mesclar        { background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.3); color: #c084fc; }
+.btn-card.mesclar:hover  { background: rgba(168,85,247,0.24); }
 
 /* Card de categoria PENDENTE DE CONTABILIZAÇÃO — borda âmbar pra
    chamar atenção visualmente, distinguindo de um card comum. */
@@ -1209,10 +1170,6 @@
   box-shadow: 0 10px 40px rgba(0,0,0,0.5);
 }
 
-/* A tabela renderizada dentro do wrapper claro precisa de cores
-   legíveis em fundo branco — os componentes .dre-table/.balancete-table
-   normalmente vivem num painel escuro, então sobrescrevemos aqui
-   dentro do wrapper específico do balancete ampliado. */
 .modal-ampliado__canvas-wrapper .balancete-table { color: #111; }
 .modal-ampliado__canvas-wrapper .balancete-table th { background: #eee; color: #333; }
 .modal-ampliado__canvas-wrapper .balancete-table td { border-bottom-color: #ddd; }

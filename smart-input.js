@@ -1,116 +1,4 @@
-/**
- * SMART-INPUT.JS — Smart Date + Smart Input (classificação automática)
- * ================================================
- * Objetivo: reduzir ao máximo o esforço do cliente ao lançar uma
- * transação. Duas frentes:
- *
- *   1) SMART DATE — o campo de data é preenchido sozinho com a data de
- *      hoje assim que o formulário aparece, mas o cliente pode alterar
- *      livremente (lançamento retroativo ou futuro).
- *
- *   2) SMART INPUT — o cliente descreve a transação em texto livre
- *      (ex: "Posto Shell", "Gasolina", "Uber pro trabalho") e o sistema
- *      tenta classificar tipo + categoria sozinho, preenchendo o
- *      dropdown de categoria — sempre deixando o cliente livre para
- *      corrigir, nunca travando o formulário.
- *
- * Padrão: script global (sem import/export), igual ao resto do projeto.
- * Depende de: DatabaseModule (database.js), UIModule (ui.js) — ambos
- * devem ser carregados ANTES deste ficheiro no HTML.
- *
- * ⚠️ HISTÓRICO DE UM BUG JÁ CORRIGIDO NESTA VERSÃO — LEIA ANTES DE MEXER:
- * A versão anterior usava, como fallback quando `/api/classify` falhava
- * (o que acontece SEMPRE hoje, porque o endpoint ainda é um placeholder
- * — ver nota abaixo), uma categoria fixa chamada "outros". Só que essa
- * categoria NUNCA existiu na tabela `categorias`. Resultado: TODA
- * descrição digitada caía no mesmo beco sem saída. A CORREÇÃO: existe
- * um CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (`classificarLocalmente`)
- * que já mapeia direto para categorias reais.
- *
- * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (SINÔNIMOS CADASTRADOS PELO
- * ADMIN): agora existe uma fonte de classificação melhor que a
- * heurística fixa em código: `categorias.palavras_chave` (text[]),
- * editável pelo admin em admin.html (modal de categoria → campo
- * "Palavras-chave / sinônimos"). Ex: a categoria "Aluguel Ganho" pode
- * ter as palavras-chave "aluguel ganho, aluguel recebido, recebimento
- * de aluguel, renda de aluguel" — não importa a ORDEM das palavras
- * nem a variação de texto exata que o cliente digitar, desde que o
- * termo cadastrado apareça (como substring, já normalizado sem
- * acento/caixa) dentro da descrição.
- *
- * ATUALIZAÇÃO — MATCH BIDIRECIONAL + POR RADICAL (RESOLVE "cabelo" NÃO
- * ACHAR "Cabeleireiro"): o match é BIDIRECIONAL (`a.includes(b) ||
- * b.includes(a)`) e também compara contra o NOME da própria categoria,
- * não só os sinônimos. Pra palavras com pelo menos 5 caracteres, um
- * match de RADICAL (mesmos 5 primeiros caracteres) também conta —
- * cobre variações de gênero/plural/conjugação da MESMA palavra
- * (cabelo/cabeleireiro).
- *
- * ATUALIZAÇÃO — GRUPOS SEMÂNTICOS (RESOLVE "Unha" NÃO ACHAR
- * "Manicure"): o match por radical só funciona quando duas palavras
- * COMPARTILHAM TEXTO (mesmo início). Só que "Unha" e "Manicure", ou
- * "Notebook" e "Eletrônicos", não têm NENHUMA letra em comum como
- * string — nenhum algoritmo de substring/radical resolve isso, porque
- * não é uma questão de TEXTO parecido, é uma questão de SIGNIFICADO
- * parecido. A única forma honesta de resolver isso é uma lista CURADA
- * manualmente (`GRUPOS_SEMANTICOS_CATEGORIA`, abaixo): cada grupo tem
- * um nome de categoria "guarda-chuva" (ex: "Eletrônicos") e uma lista
- * de itens que pertencem a ele (Celular, Smartphone, Notebook...).
- * Quando a descrição digitada bate com um desses itens, o sistema
- * procura se já existe uma categoria REAL cadastrada com esse nome
- * guarda-chuva (ou parecido) e usa ela — NUNCA inventa uma categoria
- * nova sozinho. Essa é sempre tratada como confiança APROXIMADA (pede
- * confirmação), porque é uma inferência de significado, não um texto
- * batendo com certeza.
- *
- * ATUALIZAÇÃO — CONFIANÇA DO MATCH (ALTA vs APROXIMADA):
- * Um match por SUBSTRING (bidirecional) é ALTA confiança. Um match só
- * por RADICAL ou por GRUPO SEMÂNTICO é confiança APROXIMADA — nesses
- * casos: a mensagem exibida diz explicitamente "confira antes de
- * salvar"; o texto do botão de categoria mostra "(confira)" ao lado do
- * nome; em importacao-extrato.js, o selo da linha na tabela de revisão
- * muda de "🔑 Sinônimo" para "🔎 Sugestão aproximada". O formulário
- * NUNCA trava nem impede de salvar — a diferença é puramente de AVISO
- * VISUAL, pra você saber quando vale a pena olhar com mais atenção
- * antes de confirmar.
- *
- * ORDEM DE PRIORIDADE da classificação (do mais para o menos
- * confiável), usada tanto aqui quanto em importacao-extrato.js:
- *   1. Regra aprendida do próprio cliente (regras_aprendidas) — feito
- *      em regras-aprendidas.js, ANTES de chamar autoClassify(). Sempre
- *      alta confiança (o próprio cliente já confirmou essa categoria
- *      pra esse termo antes).
- *   2. Palavras-chave/sinônimos cadastrados pelo ADMIN em `categorias`
- *      OU nome da própria categoria (encontrarCategoriaPorPalavraChave,
- *      abaixo) — alta confiança se substring, aproximada se só radical.
- *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — sempre
- *      confiança aproximada, só entra em ação se já existir uma
- *      categoria real com o nome guarda-chuva do grupo.
- *   4. Endpoint /api/classify (IA real — hoje é placeholder).
- *   5. Classificador local por palavras-chave FIXAS no código
- *      (classificarLocalmente) — cobre termos comuns mesmo sem
- *      nenhuma curadoria feita pelo admin ainda.
- *   6. Nenhum match — pede seleção manual, nunca inventa uma categoria.
- *
- * ⚠️ SOBRE O ENDPOINT `/api/classify`:
- * Continua sendo um PLACEHOLDER — nenhuma mudança nisso.
- *
- * IMPORTANTE — POR QUE NÃO INVENTAMOS UM categoria_id:
- * `transacoes.categoria_id` é uma foreign key para `categorias.id`.
- * Este módulo SEMPRE cruza qualquer sugestão com as categorias REAIS
- * já cadastradas no banco antes de preencher o campo oculto
- * `transCategory`. Se não achar uma correspondência confiável, ele NÃO
- * grava um id qualquer — apenas avisa o cliente para escolher manualmente.
- *
- * GARANTIA DURA (não depende de confiança nenhuma): o formulário só
- * salva se `transCategory` tiver um id de categoria REAL selecionado
- * (ver handleAddTransaction em app.js) — e, tanto no formulário manual
- * quanto na importação, o `tipo` salvo na transação vem sempre da
- * categoria escolhida (`cat.tipo`), nunca de uma suposição solta. Uma
- * transação de despesa não tem como ser salva com uma categoria de
- * receita, e vice-versa — essa checagem é uma trava dura, não uma
- * sugestão.
- */
+
 
 // ══════════════════════════════════════════════════════════════
 // ESTADO DO FORMULÁRIO
@@ -159,9 +47,7 @@ function normalizarTexto(txt) {
  *     (correspondência exata de texto — o nível de certeza mais alto).
  *   - match=true, confiancaAlta=false → só bateram os primeiros
  *     RADICAL_MIN_LEN caracteres (raiz comum) — ex: "cabelo" vs
- *     "cabeleireiro". Provavelmente certo, mas não é garantido (duas
- *     palavras diferentes podem começar parecido), por isso o
- *     resultado precisa de confirmação visual antes de salvar.
+ *     "cabeleireiro".
  *   - match=false → nenhuma correspondência.
  */
 function avaliarCorrespondencia(a, b) {
@@ -187,24 +73,16 @@ function textoContemOuEhContido(a, b) {
 /**
  * Resolve o caso de itens que são conceitualmente a mesma coisa mas
  * não compartilham NENHUM texto em comum (ex: "Celular" e
- * "Smartwatch" não têm nada de parecido como string — nem match por
- * substring nem por radical vai funcionar aqui, porque não é uma
- * questão de TEXTO parecido, é de SIGNIFICADO parecido).
- *
- * Cada grupo tem um nome de categoria CANÔNICO/"guarda-chuva" (ex:
- * "Eletrônicos") e uma lista de termos que pertencem a ele. Quando a
+ * "Smartwatch"). Cada grupo tem um nome de categoria CANÔNICO/
+ * "guarda-chuva" e uma lista de termos que pertencem a ele. Quando a
  * descrição bate com um desses termos, o sistema procura se já existe
  * uma categoria REAL cadastrada com esse nome canônico (ou algo bem
- * parecido) e usa ela — se não existir ainda, não inventa nada, só
- * fica disponível pra sugerir ao CRIAR uma categoria nova (ver
- * categoria-personalizada.js).
+ * parecido, via substring) e usa ela — nunca inventa nada.
  *
- * Esta lista é só um PONTO DE PARTIDA com os grupos mais comuns pra um
- * uso pessoal/familiar — adicione mais grupos/termos aqui conforme
- * surgirem casos parecidos no seu uso real. O padrão de cada linha é
- * sempre o mesmo: nome canônico + tipo + grupo do BI + lista de termos
- * (tudo minúsculo e sem acento já ajuda a leitura, mas não é
- * obrigatório — normalizarTexto() cuida disso em tempo de execução).
+ * Os nomes canônicos abaixo foram escolhidos pra baterem (por
+ * substring) com os nomes reais já cadastrados no banco a partir do
+ * plano de contas aplicado — ver nota completa no cabeçalho do
+ * arquivo.
  */
 const GRUPOS_SEMANTICOS_CATEGORIA = [
     {
@@ -231,7 +109,7 @@ const GRUPOS_SEMANTICOS_CATEGORIA = [
         ]
     },
     {
-        categoria: 'Vestuário e Calçados',
+        categoria: 'Roupas e Calçados',
         tipo: 'despesa',
         grupo: 'estilo_de_vida',
         termos: [
@@ -241,13 +119,12 @@ const GRUPOS_SEMANTICOS_CATEGORIA = [
         ]
     },
     {
-        categoria: 'Manutenção Automotiva',
+        categoria: 'Manutenção Preventiva do Veículo',
         tipo: 'despesa',
         grupo: 'essencial',
         termos: [
             'oficina', 'mecanico', 'revisao do carro', 'troca de oleo',
-            'pneu', 'alinhamento', 'balanceamento', 'bateria do carro',
-            'seguro do carro', 'ipva', 'licenciamento'
+            'pneu', 'alinhamento', 'balanceamento', 'bateria do carro'
         ]
     }
 ];
@@ -283,13 +160,9 @@ function encontrarGrupoSemantico(texto) {
  * confiável):
  *   1. Sinônimo cadastrado pelo admin em `palavras_chave`.
  *   2. Nome da própria categoria.
- *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — só entra
- *      em ação se existir uma categoria real com o nome guarda-chuva
- *      do grupo (ex: "Eletrônicos").
+ *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA).
  *
- * Retorna a categoria encontrada com um campo extra `_confiancaAlta`
- * (true = correspondência exata de texto; false = match aproximado —
- * por radical OU por grupo semântico, precisa de confirmação visual).
+ * Retorna a categoria encontrada com um campo extra `_confiancaAlta`.
  * Retorna null se nada bater em nenhuma das 3 passadas.
  */
 function encontrarCategoriaPorPalavraChave(categorias, descricao) {
@@ -307,7 +180,7 @@ function encontrarCategoriaPorPalavraChave(categorias, descricao) {
                 if (!resultado.match) continue;
 
                 if (resultado.confiancaAlta) {
-                    return { cat, confiancaAlta: true }; // não dá pra achar melhor que isso — encerra já
+                    return { cat, confiancaAlta: true };
                 }
                 if (!melhorMatch) melhorMatch = { cat, confiancaAlta: false };
             }
@@ -319,19 +192,14 @@ function encontrarCategoriaPorPalavraChave(categorias, descricao) {
     const porSinonimo = melhorPorPassada(cat => Array.isArray(cat.palavras_chave) ? cat.palavras_chave : []);
     if (porSinonimo) return { ...porSinonimo.cat, _confiancaAlta: porSinonimo.confiancaAlta };
 
-    // 2ª passada: nome da própria categoria (fallback quando não há
-    // sinônimo cadastrado ou nenhum bateu) — é aqui que "cabelo" passa
-    // a reconhecer diretamente uma categoria chamada "Cabeleireiro".
+    // 2ª passada: nome da própria categoria
     const porNome = melhorPorPassada(cat => [cat.nome]);
     if (porNome) return { ...porNome.cat, _confiancaAlta: porNome.confiancaAlta };
 
-    // 3ª passada: GRUPO SEMÂNTICO — cobre itens que são a mesma coisa
-    // mas não compartilham texto nenhum (ex: "Notebook" -> categoria
-    // "Eletrônicos"). Só entra em ação se já existir uma categoria
-    // REAL cadastrada com o nome canônico do grupo (ou parecido) —
-    // nunca inventa uma categoria. Sempre confiança aproximada, mesmo
-    // que o nome da categoria bata exato — é uma inferência de
-    // significado, não um texto batendo com certeza.
+    // 3ª passada: GRUPO SEMÂNTICO — só entra em ação se já existir uma
+    // categoria REAL cadastrada com o nome canônico do grupo (ou
+    // parecido) — nunca inventa uma categoria. Sempre confiança
+    // aproximada, é uma inferência de significado, não texto batendo.
     const grupoSemantico = encontrarGrupoSemantico(alvo);
     if (grupoSemantico) {
         const nomeCanonico = normalizarTexto(grupoSemantico.categoria);
@@ -355,30 +223,50 @@ const REGRAS_CLASSIFICACAO_LOCAL = [
     [/freelance|freela|bico|consultoria/i,                          'receita', 'Freelance'],
     [/dividendo|jcp|rendimento/i,                                   'receita', 'Dividendos'],
     [/renda extra|extra\b/i,                                        'receita', 'Renda Extra'],
+    [/13[oº]|decimo terceiro/i,                                     'receita', '13º Salário'],
+    [/restitui[çc][aã]o/i,                                          'receita', 'Restituição de Imposto de Renda'],
 
     // ── Investimento ──
     [/previd[eê]ncia/i,                                             'despesa', 'Previdência Privada'],
-    [/reserva|poupan[çc]a|emerg[eê]ncia/i,                          'despesa', 'Reserva de Emergência'],
-    [/investimento|aporte/i,                                        'despesa', 'Aporte em Investimentos'],
+    [/reserva|poupan[çc]a|emerg[eê]ncia|tesouro selic|cdb/i,        'despesa', 'Reserva de Emergência'],
+    [/investimento|aporte|a[çc][oõ]es|fii\b/i,                      'despesa', 'Aporte em Investimentos'],
 
     // ── Essencial ──
-    [/luz|energia|[aá]gua|g[aá]s\b|internet|telefone|celular/i,     'despesa', 'Contas e Utilidades'],
-    [/aluguel|condom[ií]nio|financiamento|iptu/i,                   'despesa', 'Moradia'],
-    [/mercado|supermercado|feira|a[çc]ougue|padaria|hortifruti|hortifruti|quitanda/i, 'despesa', 'Alimentação'],
-    [/biscoito|bolacha|arroz|feij[aã]o|macarr[aã]o|massa\b|carne|frango|peixe|leite|p[aã]o\b|queijo|presunto|manteiga|margarina|caf[eé]\b|a[çc][uú]car|[oó]leo|tempero|fruta|verdura|legume|ovo\b|iogurte/i, 'despesa', 'Alimentação'],
-    [/farm[aá]cia|m[eé]dico|consulta|plano de sa[uú]de|hospital|dentista|rem[eé]dio/i, 'despesa', 'Saúde'],
-    [/escola|faculdade|curso|mensalidade|material escolar|livro did[aá]tico/i, 'despesa', 'Educação'],
-    [/[oô]nibus|uber|99\b|combust[ií]vel|gasolina|posto|estacionamento|pedagio|pedágio|metr[oô]|passagem de [oô]nibus/i, 'despesa', 'Transporte'],
-    [/oficina|mec[aâ]nico|revis[aã]o do carro|troca de [oó]leo|pneu|alinhamento|balanceamento/i, 'despesa', 'Manutenção Automotiva'],
+    [/luz|energia el[eé]trica/i,                                    'despesa', 'Energia Elétrica'],
+    [/[aá]gua|esgoto/i,                                              'despesa', 'Água e Esgoto'],
+    [/g[aá]s\b|botijao/i,                                            'despesa', 'Gás'],
+    [/internet|banda larga|wifi/i,                                   'despesa', 'Internet Banda Larga'],
+    [/aluguel|financiamento imobiliario/i,                          'despesa', 'Aluguel ou Financiamento Imobiliário'],
+    [/condominio/i,                                                  'despesa', 'Condomínio'],
+    [/iptu/i,                                                        'despesa', 'IPTU'],
+    [/mercado|supermercado/i,                                        'despesa', 'Supermercado'],
+    [/feira|sacolao|hortifruti/i,                                    'despesa', 'Feira e Sacolão'],
+    [/a[çc]ougue|peixaria/i,                                         'despesa', 'Açougue e Peixaria'],
+    [/farm[aá]cia|rem[eé]dio|medicamento/i,                          'despesa', 'Medicamentos de Uso Contínuo'],
+    [/plano de sa[uú]de|convenio medico|odontologico/i,              'despesa', 'Plano de Saúde / Odontológico'],
+    [/consulta|exame|m[eé]dico|dentista/i,                           'despesa', 'Consultas e Exames'],
+    [/faculdade|mensalidade|pos gradua[çc][aã]o/i,                   'despesa', 'Mensalidade Faculdade'],
+    [/curso|livro tecnico/i,                                         'despesa', 'Cursos Livres e Livros Técnicos'],
+    [/combust[ií]vel|gasolina|posto|alcool|etanol|gnv/i,             'despesa', 'Combustível'],
+    [/seguro do carro|seguro auto/i,                                 'despesa', 'Seguro Auto'],
+    [/ipva|licenciamento/i,                                          'despesa', 'IPVA e Licenciamento'],
+    [/oficina|mec[aâ]nico|revis[aã]o do carro|troca de [oó]leo|pneu|alinhamento|balanceamento/i, 'despesa', 'Manutenção Preventiva do Veículo'],
+    [/[oô]nibus|uber|99\b|metr[oô]|passagem de [oô]nibus/i,          'despesa', 'Transporte Público'],
+    [/veterinario|racao|vacina do pet/i,                             'despesa', 'Pet: Ração, Veterinário e Vacinas'],
 
     // ── Estilo de vida ──
-    [/restaurante|ifood|delivery|lanche|lanchonete|pizza|hamb[uú]rguer|bar\b/i, 'despesa', 'Delivery'],
-    [/streaming|netflix|spotify|assinatura/i,                       'despesa', 'Streaming e Assinaturas'],
+    [/restaurante|bar\b/i,                                           'despesa', 'Restaurantes e Bares'],
+    [/ifood|delivery|rappi/i,                                        'despesa', 'Delivery'],
+    [/cafe\b|cafeteria|padaria/i,                                    'despesa', 'Cafés'],
+    [/cinema|show|teatro/i,                                          'despesa', 'Cinema e Shows'],
+    [/balada|festa|boate/i,                                          'despesa', 'Baladas'],
+    [/streaming|netflix|spotify|assinatura/i,                        'despesa', 'Streaming e Assinaturas'],
     [/viagem|hotel|passagem|airbnb/i,                                'despesa', 'Viagens'],
-    [/shopping|roupa|cal[çc]ado|compra/i,                            'despesa', 'Compras'],
-    [/cinema|show|festa|balada|lazer|cabel[eo]/i,                    'despesa', 'Lazer'],
-    [/celular|smartphone|notebook|tablet|fone de ouvido|video ?game/i, 'despesa', 'Eletrônicos'],
-    [/manicure|pedicure|unha|maquiagem|sobrancelha|estetica/i,      'despesa', 'Beleza e Estética'],
+    [/academia|personal trainer|crossfit|pilates/i,                  'despesa', 'Academia'],
+    [/presente|doacao|caridade/i,                                    'despesa', 'Presentes e Doações'],
+    [/celular|smartphone|notebook|tablet|fone de ouvido|video ?game/i, 'despesa', 'Eletrônicos e Gadgets'],
+    [/manicure|pedicure|unha|maquiagem|sobrancelha|estetica/i,      'despesa', 'Salão de Beleza e Estética'],
+    [/roupa|sapato|tenis|cal[çc]ado|mala de viagem/i,                'despesa', 'Roupas e Calçados'],
 ];
 
 function classificarLocalmente(descricao) {
@@ -443,10 +331,6 @@ function encontrarCategoriaCorrespondente(categorias, nomeSugerido, tipoSugerido
     );
     if (match) return match;
 
-    // Match bidirecional + radical (mesma lógica de
-    // encontrarCategoriaPorPalavraChave) — cobre variações entre o
-    // nome sugerido pela IA/classificador local e o nome real
-    // cadastrado (ex: sugestão "Cabelo" vs categoria "Cabeleireiro").
     match = categorias.find(c => {
         if (c.tipo !== tipoSugerido) return false;
         return textoContemOuEhContido(nomeAlvo, normalizarTexto(c.nome));
@@ -499,9 +383,6 @@ async function preencherFormularioComClassificacao(resultado) {
         hiddenInput.value = match.id;
         marcarOpcaoSelecionadaNoPainel(match.id);
 
-        // Confiança aproximada (radical OU grupo semântico) — o texto
-        // do botão já avisa "(confira)" ao lado do nome, pra não passar
-        // despercebido mesmo se a pessoa não ler a mensagem toast.
         const nomeExibido = resultado.confiancaAlta === false ? `${match.nome} (confira)` : match.nome;
         setSmartInputEstadoVisual('sugestao', nomeExibido);
 
@@ -545,15 +426,6 @@ async function preencherFormularioComClassificacao(resultado) {
 // ══════════════════════════════════════════════════════════════
 // AUTOCLASSIFY — núcleo do Smart Input
 // ══════════════════════════════════════════════════════════════
-/**
- * Ordem de tentativa (ver nota completa no cabeçalho do arquivo):
- *   1. Palavras-chave/sinônimos/nome/grupo semântico (todos dentro de
- *      encontrarCategoriaPorPalavraChave), com distinção de confiança
- *      alta vs aproximada.
- *   2. Endpoint /api/classify (placeholder).
- *   3. Classificador local por palavras-chave fixas no código.
- *   4. Nenhum match — seleção manual.
- */
 async function autoClassify(description) {
     const descricao = (description || '').trim();
     TransactionFormState.descricao = descricao;
@@ -721,4 +593,4 @@ if (document.readyState === 'loading') {
     initForm(false);
 }
 
-console.log('✅ smart-input.js carregado (Smart Date + Smart Input + sinônimos + radical + grupos semânticos)');
+console.log('✅ smart-input.js carregado (sinônimos + radical + grupos semânticos alinhados ao plano de contas)');

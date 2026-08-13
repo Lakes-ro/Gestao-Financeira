@@ -73,8 +73,8 @@
       </div>
       <p class="panel-subtitle" style="margin-bottom:1rem;">
         Estas são as categorias disponíveis para os clientes lançarem transações, organizadas por seção contábil
-        (1.x Receitas, 2.x Despesas) — o mesmo agrupamento usado no Balancete de cada cliente. Sem categorias aqui,
-        o formulário de transação do cliente fica vazio.
+        (1.x Receitas, 2.x Despesas Fixas, 3.x Investimentos, 4.x Estilo de Vida) — o mesmo agrupamento usado no
+        Balancete de cada cliente. Sem categorias aqui, o formulário de transação do cliente fica vazio.
       </p>
 
       <!-- Pendentes de Contabilização: categorias que os PRÓPRIOS
@@ -86,7 +86,8 @@
           <h2 class="section-title">📥 Pendentes de Contabilização</h2>
         </div>
         <p class="panel-subtitle" style="margin-bottom:1rem;">
-          Categorias criadas pelos próprios clientes — confirme ou ajuste o grupo antes que elas contem no BI.
+          Categorias criadas pelos próprios clientes — confirme, ajuste o grupo, ou mescle numa categoria já
+          existente (ex: "Unha" → "Salão de Beleza e Estética") antes que elas contem no BI.
         </p>
         <div id="pendentes-revisao-grid" class="cards-grid"></div>
       </div>
@@ -97,9 +98,9 @@
           style="width:100%; background:var(--bg-input); border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:0.55rem 0.85rem; color:var(--text-primary); font-family:var(--font-body); font-size:0.875rem; outline:none;">
       </div>
 
-      <!-- A grade agora é renderizada por categorias.js AGRUPADA por
-           seção contábil (.plano-contas-secao) em vez de uma lista
-           plana — ver renderCategoriasFiltradas() em categorias.js. -->
+      <!-- A grade é renderizada por categorias.js AGRUPADA por seção
+           contábil (.plano-contas-secao), usando o codigo_contabil
+           REAL salvo no banco quando existe. -->
       <div id="categorias-grid">
         <p class="empty-state">Carregando...</p>
       </div>
@@ -298,6 +299,16 @@
           <select id="categoria-grupo"></select>
         </div>
         <div class="form-group">
+          <label>Código Contábil (opcional)</label>
+          <input type="text" id="categoria-codigo-contabil" placeholder="Ex: 2.1.4 (Energia Elétrica)">
+          <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
+            Segue o plano de contas do modelo: 1.x Receitas, 2.x Despesas Fixas e Essenciais,
+            3.x Investimentos e Futuro, 4.x Estilo de Vida e Despesas Variáveis. Deixe em branco se a
+            categoria não se encaixa em nenhuma conta específica do modelo — ela continua funcionando
+            normalmente, só aparece com o código do GRUPO em vez do código da conta.
+          </p>
+        </div>
+        <div class="form-group">
           <label>Palavras-chave / sinônimos (opcional)</label>
           <textarea id="categoria-palavras-chave" rows="3" placeholder="Ex: aluguel ganho, aluguel recebido, recebimento de aluguel"></textarea>
           <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
@@ -312,6 +323,32 @@
       <div class="modal-footer">
         <button class="btn-secondary" data-modal="modal-categoria">Cancelar</button>
         <button class="btn-primary-sm" id="btn-salvar-categoria">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Mesclar Categoria -->
+  <div id="modal-mesclar-categoria" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-mesclar-title">🔀 Mesclar Categoria</h3>
+        <button class="modal-close" data-modal="modal-mesclar-categoria">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="mesclar-origem-id" />
+        <p class="panel-subtitle" id="mesclar-origem-descricao" style="margin-bottom:0.5rem;"></p>
+        <div class="form-group">
+          <label>Categoria de destino</label>
+          <select id="mesclar-destino-select"></select>
+        </div>
+        <p class="panel-subtitle" style="margin-top:0.75rem; font-size:0.75rem; color: var(--accent-danger);">
+          ⚠️ Move todas as transações e regras aprendidas da categoria de origem para a categoria escolhida,
+          e DELETA a categoria de origem. Não pode ser desfeito.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-mesclar-categoria">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-confirmar-mesclagem" style="background: var(--accent-danger); color:#fff;">Mesclar e Deletar Origem</button>
       </div>
     </div>
   </div>
