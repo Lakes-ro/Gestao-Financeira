@@ -1,4 +1,106 @@
-
+/**
+ * SMART-INPUT.JS — Smart Date + Smart Input (classificação automática)
+ * ================================================
+ * Objetivo: reduzir ao máximo o esforço do cliente ao lançar uma
+ * transação. Duas frentes:
+ *
+ *   1) SMART DATE — o campo de data é preenchido sozinho com a data de
+ *      hoje assim que o formulário aparece, mas o cliente pode alterar
+ *      livremente (lançamento retroativo ou futuro).
+ *
+ *   2) SMART INPUT — o cliente descreve a transação em texto livre
+ *      (ex: "Posto Shell", "Gasolina", "Uber pro trabalho") e o sistema
+ *      tenta classificar tipo + categoria sozinho, preenchendo o
+ *      dropdown de categoria — sempre deixando o cliente livre para
+ *      corrigir, nunca travando o formulário.
+ *
+ * Padrão: script global (sem import/export), igual ao resto do projeto.
+ * Depende de: DatabaseModule (database.js), UIModule (ui.js) — ambos
+ * devem ser carregados ANTES deste ficheiro no HTML.
+ *
+ * ⚠️ HISTÓRICO DE UM BUG JÁ CORRIGIDO NESTA VERSÃO — LEIA ANTES DE MEXER:
+ * A versão anterior usava, como fallback quando `/api/classify` falhava
+ * (o que acontece SEMPRE hoje, porque o endpoint ainda é um placeholder
+ * — ver nota abaixo), uma categoria fixa chamada "outros". Só que essa
+ * categoria NUNCA existiu na tabela `categorias`. Resultado: TODA
+ * descrição digitada caía no mesmo beco sem saída. A CORREÇÃO: existe
+ * um CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (`classificarLocalmente`)
+ * que já mapeia direto para categorias reais.
+ *
+ * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (SINÔNIMOS CADASTRADOS PELO
+ * ADMIN): agora existe uma fonte de classificação melhor que a
+ * heurística fixa em código: `categorias.palavras_chave` (text[]),
+ * editável pelo admin em admin.html (modal de categoria → campo
+ * "Palavras-chave / sinônimos").
+ *
+ * ATUALIZAÇÃO — MATCH BIDIRECIONAL + POR RADICAL (RESOLVE "cabelo" NÃO
+ * ACHAR "Cabeleireiro"): o match é BIDIRECIONAL (`a.includes(b) ||
+ * b.includes(a)`) e também compara contra o NOME da própria categoria.
+ * Pra palavras com pelo menos 5 caracteres, um match de RADICAL (mesmos
+ * 5 primeiros caracteres) também conta.
+ *
+ * ATUALIZAÇÃO — GRUPOS SEMÂNTICOS (RESOLVE "Unha" NÃO ACHAR
+ * "Manicure"): o match por radical só funciona quando duas palavras
+ * COMPARTILHAM TEXTO. "Unha" e "Manicure", ou "Notebook" e
+ * "Eletrônicos", não têm NENHUMA letra em comum como string — não é
+ * questão de TEXTO parecido, é de SIGNIFICADO parecido. A única forma
+ * honesta de resolver isso é uma lista CURADA manualmente
+ * (`GRUPOS_SEMANTICOS_CATEGORIA`, abaixo): cada grupo tem um nome de
+ * categoria "guarda-chuva" e uma lista de itens que pertencem a ele.
+ * Quando a descrição bate com um desses itens, o sistema procura se já
+ * existe uma categoria REAL cadastrada com esse nome guarda-chuva (ou
+ * parecido) e usa ela — NUNCA inventa uma categoria nova sozinho.
+ *
+ * ATUALIZAÇÃO — NOMES CANÔNICOS ALINHADOS AO PLANO DE CONTAS REAL: os
+ * nomes usados em `GRUPOS_SEMANTICOS_CATEGORIA.categoria` foram
+ * ajustados pra baterem (por substring) com os nomes de verdade que
+ * agora existem no banco, aplicados a partir do modelo contábil
+ * (1.0.0 Receitas / 2.0.0 Despesas Fixas / 3.0.0 Investimentos /
+ * 4.0.0 Estilo de Vida — ver migration "plano_de_contas_modelo_completo"):
+ *   - "Eletrônicos" -> bate com a categoria real "Eletrônicos e Gadgets" (4.4.3)
+ *   - "Beleza e Estética" -> bate com "Salão de Beleza e Estética" (4.3.1)
+ *   - "Roupas e Calçados" -> bate exatamente com a categoria real (4.4.1)
+ *   - "Manutenção Preventiva do Veículo" -> bate exatamente com a categoria real (2.3.5)
+ *
+ * ATUALIZAÇÃO — CONFIANÇA DO MATCH (ALTA vs APROXIMADA):
+ * Um match por SUBSTRING (bidirecional) é ALTA confiança. Um match só
+ * por RADICAL ou por GRUPO SEMÂNTICO é confiança APROXIMADA — nesses
+ * casos: a mensagem exibida diz explicitamente "confira antes de
+ * salvar"; o texto do botão de categoria mostra "(confira)" ao lado do
+ * nome; em importacao-extrato.js, o selo da linha na tabela de revisão
+ * muda de "🔑 Sinônimo" para "🔎 Sugestão aproximada". O formulário
+ * NUNCA trava nem impede de salvar — a diferença é puramente de AVISO
+ * VISUAL.
+ *
+ * ORDEM DE PRIORIDADE da classificação (do mais para o menos
+ * confiável), usada tanto aqui quanto em importacao-extrato.js:
+ *   1. Regra aprendida do próprio cliente (regras_aprendidas).
+ *   2. Palavras-chave/sinônimos OU nome da própria categoria
+ *      (encontrarCategoriaPorPalavraChave) — alta confiança se
+ *      substring, aproximada se só radical.
+ *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — sempre
+ *      confiança aproximada, só entra em ação se já existir uma
+ *      categoria real com o nome guarda-chuva do grupo.
+ *   4. Endpoint /api/classify (IA real — hoje é placeholder).
+ *   5. Classificador local por palavras-chave FIXAS no código.
+ *   6. Nenhum match — pede seleção manual, nunca inventa uma categoria.
+ *
+ * ⚠️ SOBRE O ENDPOINT `/api/classify`:
+ * Continua sendo um PLACEHOLDER — nenhuma mudança nisso.
+ *
+ * IMPORTANTE — POR QUE NÃO INVENTAMOS UM categoria_id:
+ * `transacoes.categoria_id` é uma foreign key para `categorias.id`.
+ * Este módulo SEMPRE cruza qualquer sugestão com as categorias REAIS
+ * já cadastradas no banco antes de preencher o campo oculto
+ * `transCategory`. Se não achar uma correspondência confiável, ele NÃO
+ * grava um id qualquer — apenas avisa o cliente para escolher manualmente.
+ *
+ * GARANTIA DURA (não depende de confiança nenhuma): o formulário só
+ * salva se `transCategory` tiver um id de categoria REAL selecionado
+ * (ver handleAddTransaction em app.js) — e o `tipo` salvo na transação
+ * vem sempre da categoria escolhida (`cat.tipo`), nunca de uma
+ * suposição solta.
+ */
 
 // ══════════════════════════════════════════════════════════════
 // ESTADO DO FORMULÁRIO

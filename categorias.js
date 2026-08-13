@@ -1,698 +1,550 @@
 /**
- * SMART-INPUT.JS — Smart Date + Smart Input (classificação automática)
- * ================================================
- * Objetivo: reduzir ao máximo o esforço do cliente ao lançar uma
- * transação. Duas frentes:
+ * CATEGORIAS.JS — Módulo: Categorias (admin.html)
+ * Padrão: script global. Sem import/export.
+ * Depende de: supabaseClient, allClientes, loadAllClientes, openModal,
+ *             closeModal, showToast (definidos em admin.js),
+ *             obterCodigoGrupo (definido em contabilidade.js —
+ *             carregado ANTES deste ficheiro).
  *
- *   1) SMART DATE — o campo de data é preenchido sozinho com a data de
- *      hoje assim que o formulário aparece, mas o cliente pode alterar
- *      livremente (lançamento retroativo ou futuro).
+ * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (PALAVRAS-CHAVE/SINÔNIMOS):
+ * Cada categoria tem uma coluna `palavras_chave` (text[]), editável no
+ * modal de categoria como uma lista separada por vírgula. Usado pelo
+ * Smart Input, pela importação de extrato e pela criação de categoria
+ * personalizada do cliente pra reconhecer a descrição digitada e
+ * sugerir a categoria certa.
  *
- *   2) SMART INPUT — o cliente descreve a transação em texto livre
- *      (ex: "Posto Shell", "Gasolina", "Uber pro trabalho") e o sistema
- *      tenta classificar tipo + categoria sozinho, preenchendo o
- *      dropdown de categoria — sempre deixando o cliente livre para
- *      corrigir, nunca travando o formulário.
+ * ATUALIZAÇÃO — PERFORMANCE DO "CONFIRMAR" (Pendentes de
+ * Contabilização): a mudança é aplicada de forma OTIMISTA na UI antes
+ * de confirmar no servidor, revertendo só se o servidor recusar.
  *
- * Padrão: script global (sem import/export), igual ao resto do projeto.
- * Depende de: DatabaseModule (database.js), UIModule (ui.js) — ambos
- * devem ser carregados ANTES deste ficheiro no HTML.
+ * ATUALIZAÇÃO — "RECEITA ANTES DE DESPESA": Receita sempre aparece
+ * antes de Despesa em toda consulta/lista/select.
  *
- * ⚠️ HISTÓRICO DE UM BUG JÁ CORRIGIDO NESTA VERSÃO — LEIA ANTES DE MEXER:
- * A versão anterior usava, como fallback quando `/api/classify` falhava
- * (o que acontece SEMPRE hoje, porque o endpoint ainda é um placeholder
- * — ver nota abaixo), uma categoria fixa chamada "outros". Só que essa
- * categoria NUNCA existiu na tabela `categorias`. Resultado: TODA
- * descrição digitada caía no mesmo beco sem saída. A CORREÇÃO: existe
- * um CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (`classificarLocalmente`)
- * que já mapeia direto para categorias reais.
+ * ATUALIZAÇÃO — CÓDIGO CONTÁBIL REAL DO BANCO (`categorias.codigo_contabil`):
+ * O plano de contas do modelo fornecido (1.0.0 Receitas / 2.0.0
+ * Despesas Fixas / 3.0.0 Investimentos / 4.0.0 Estilo de Vida, com
+ * contas granulares tipo "2.1.4 Energia Elétrica") foi aplicado
+ * direto no banco — cada categoria do modelo agora tem um código real
+ * salvo em `codigo_contabil` (ex: "2.1.4"), não mais calculado só na
+ * hora de exibir. A grade prioriza esse código real quando ele existe;
+ * categorias mais antigas/pessoais que ainda não têm código (ex:
+ * "Lazer", "Moradia", categorias criadas por clientes) continuam
+ * caindo no código de GRUPO calculado (obterCodigoGrupo, de
+ * contabilidade.js) como fallback — nada quebra, nenhuma categoria
+ * "some" da tela por falta de código.
  *
- * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (SINÔNIMOS CADASTRADOS PELO
- * ADMIN): agora existe uma fonte de classificação melhor que a
- * heurística fixa em código: `categorias.palavras_chave` (text[]),
- * editável pelo admin em admin.html (modal de categoria → campo
- * "Palavras-chave / sinônimos").
- *
- * ATUALIZAÇÃO — MATCH BIDIRECIONAL + POR RADICAL (RESOLVE "cabelo" NÃO
- * ACHAR "Cabeleireiro"): o match é BIDIRECIONAL (`a.includes(b) ||
- * b.includes(a)`) e também compara contra o NOME da própria categoria.
- * Pra palavras com pelo menos 5 caracteres, um match de RADICAL (mesmos
- * 5 primeiros caracteres) também conta.
- *
- * ATUALIZAÇÃO — GRUPOS SEMÂNTICOS (RESOLVE "Unha" NÃO ACHAR
- * "Manicure"): o match por radical só funciona quando duas palavras
- * COMPARTILHAM TEXTO. "Unha" e "Manicure", ou "Notebook" e
- * "Eletrônicos", não têm NENHUMA letra em comum como string — não é
- * questão de TEXTO parecido, é de SIGNIFICADO parecido. A única forma
- * honesta de resolver isso é uma lista CURADA manualmente
- * (`GRUPOS_SEMANTICOS_CATEGORIA`, abaixo): cada grupo tem um nome de
- * categoria "guarda-chuva" e uma lista de itens que pertencem a ele.
- * Quando a descrição bate com um desses itens, o sistema procura se já
- * existe uma categoria REAL cadastrada com esse nome guarda-chuva (ou
- * parecido) e usa ela — NUNCA inventa uma categoria nova sozinho.
- *
- * ATUALIZAÇÃO — NOMES CANÔNICOS ALINHADOS AO PLANO DE CONTAS REAL: os
- * nomes usados em `GRUPOS_SEMANTICOS_CATEGORIA.categoria` foram
- * ajustados pra baterem (por substring) com os nomes de verdade que
- * agora existem no banco, aplicados a partir do modelo contábil
- * (1.0.0 Receitas / 2.0.0 Despesas Fixas / 3.0.0 Investimentos /
- * 4.0.0 Estilo de Vida — ver migration "plano_de_contas_modelo_completo"):
- *   - "Eletrônicos" -> bate com a categoria real "Eletrônicos e Gadgets" (4.4.3)
- *   - "Beleza e Estética" -> bate com "Salão de Beleza e Estética" (4.3.1)
- *   - "Roupas e Calçados" -> bate exatamente com a categoria real (4.4.1)
- *   - "Manutenção Preventiva do Veículo" -> bate exatamente com a categoria real (2.3.5)
- *
- * ATUALIZAÇÃO — CONFIANÇA DO MATCH (ALTA vs APROXIMADA):
- * Um match por SUBSTRING (bidirecional) é ALTA confiança. Um match só
- * por RADICAL ou por GRUPO SEMÂNTICO é confiança APROXIMADA — nesses
- * casos: a mensagem exibida diz explicitamente "confira antes de
- * salvar"; o texto do botão de categoria mostra "(confira)" ao lado do
- * nome; em importacao-extrato.js, o selo da linha na tabela de revisão
- * muda de "🔑 Sinônimo" para "🔎 Sugestão aproximada". O formulário
- * NUNCA trava nem impede de salvar — a diferença é puramente de AVISO
- * VISUAL.
- *
- * ORDEM DE PRIORIDADE da classificação (do mais para o menos
- * confiável), usada tanto aqui quanto em importacao-extrato.js:
- *   1. Regra aprendida do próprio cliente (regras_aprendidas).
- *   2. Palavras-chave/sinônimos OU nome da própria categoria
- *      (encontrarCategoriaPorPalavraChave) — alta confiança se
- *      substring, aproximada se só radical.
- *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA) — sempre
- *      confiança aproximada, só entra em ação se já existir uma
- *      categoria real com o nome guarda-chuva do grupo.
- *   4. Endpoint /api/classify (IA real — hoje é placeholder).
- *   5. Classificador local por palavras-chave FIXAS no código.
- *   6. Nenhum match — pede seleção manual, nunca inventa uma categoria.
- *
- * ⚠️ SOBRE O ENDPOINT `/api/classify`:
- * Continua sendo um PLACEHOLDER — nenhuma mudança nisso.
- *
- * IMPORTANTE — POR QUE NÃO INVENTAMOS UM categoria_id:
- * `transacoes.categoria_id` é uma foreign key para `categorias.id`.
- * Este módulo SEMPRE cruza qualquer sugestão com as categorias REAIS
- * já cadastradas no banco antes de preencher o campo oculto
- * `transCategory`. Se não achar uma correspondência confiável, ele NÃO
- * grava um id qualquer — apenas avisa o cliente para escolher manualmente.
- *
- * GARANTIA DURA (não depende de confiança nenhuma): o formulário só
- * salva se `transCategory` tiver um id de categoria REAL selecionado
- * (ver handleAddTransaction em app.js) — e o `tipo` salvo na transação
- * vem sempre da categoria escolhida (`cat.tipo`), nunca de uma
- * suposição solta.
+ * ATUALIZAÇÃO — MESCLAR CATEGORIAS (RESOLVE DUPLICATAS/PROLIFERAÇÃO):
+ * Ferramenta nova pra consolidar categorias que acabam virando
+ * sinônimos umas das outras com o tempo (ex: cliente cria "Unha",
+ * depois "Manicure" — mesma coisa, duas categorias). O botão
+ * "🔀 Mesclar" (em qualquer card, inclusive nos Pendentes de
+ * Contabilização) abre um modal pra escolher a categoria de destino;
+ * ao confirmar, TODAS as transações e regras aprendidas da categoria
+ * de origem são movidas pra categoria de destino, e a origem é
+ * apagada. Ação destrutiva e irreversível — por isso pede confirmação
+ * dupla (o modal + um `confirm()` nativo do navegador).
  */
 
-// ══════════════════════════════════════════════════════════════
-// ESTADO DO FORMULÁRIO
-// ══════════════════════════════════════════════════════════════
-const TransactionFormState = {
-    data:          null, // 'YYYY-MM-DD'
-    descricao:     '',
-    tipo:          null, // 'receita' | 'despesa'
-    categoriaId:   null,
-    categoriaNome: null
+let categoriaEmEdicao = null;
+let categoriasCache   = [];
+
+const GRUPOS_POR_TIPO = {
+  despesa: [
+    { value: 'essencial',      label: 'Essencial (sobrevivência)' },
+    { value: 'estilo_de_vida', label: 'Estilo de Vida' },
+    { value: 'investimento',   label: 'Investimento (poupança/reserva)' },
+    { value: 'divida',         label: 'Dívidas e Financiamentos' },
+    { value: 'transferencia',  label: 'Transferência Interna (não conta como gasto)' },
+  ],
+  receita: [
+    { value: 'renda',         label: 'Renda' },
+    { value: 'transferencia', label: 'Transferência Interna (não conta como ganho)' },
+  ],
 };
 
-function resetTransactionFormState() {
-    TransactionFormState.data          = null;
-    TransactionFormState.descricao     = '';
-    TransactionFormState.tipo          = null;
-    TransactionFormState.categoriaId   = null;
-    TransactionFormState.categoriaNome = null;
-}
+const GRUPO_LABEL = {
+  essencial:      '🟠 Essencial',
+  estilo_de_vida: '🎯 Estilo de Vida',
+  investimento:   '💰 Investimento',
+  divida:         '💳 Dívidas e Financiamentos',
+  transferencia:  '🔄 Transferência Interna',
+  renda:          '📈 Renda',
+};
 
-// ── Estado interno do módulo (cache/controle de chamadas) ──────
-let smartInputCategoriasCache = null; // cache local das categorias (evita refetch a cada blur)
-let smartInputUltimaDescricao = null; // evita reclassificar o mesmo texto repetidamente
-let smartInputPromisePendente = null; // permite ao handleAddTransaction esperar uma classificação em andamento
-
-const GRUPOS_VALIDOS = ['essencial', 'estilo_de_vida', 'investimento', 'renda'];
-
-// Tamanho mínimo de palavra para entrar na regra de match por RADICAL
-// (evita falso positivo tipo "carro" casando com "carta" só porque os
-// 3 primeiros caracteres batem — com um piso de 5 caracteres, o
-// radical comparado já carrega significado suficiente).
-const RADICAL_MIN_LEN = 5;
-
-// ── Utilitários de texto (comparação tolerante a acento/caixa) ─
-function normalizarTexto(txt) {
-    return (txt || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .trim();
-}
-
-/**
- * Compara dois textos já normalizados e devolve { match, confiancaAlta }:
- *   - match=true, confiancaAlta=true  → um é substring do outro
- *     (correspondência exata de texto — o nível de certeza mais alto).
- *   - match=true, confiancaAlta=false → só bateram os primeiros
- *     RADICAL_MIN_LEN caracteres (raiz comum) — ex: "cabelo" vs
- *     "cabeleireiro".
- *   - match=false → nenhuma correspondência.
- */
-function avaliarCorrespondencia(a, b) {
-    if (!a || !b) return { match: false, confiancaAlta: false };
-    if (a.includes(b) || b.includes(a)) return { match: true, confiancaAlta: true };
-
-    const menorTamanho = Math.min(a.length, b.length);
-    if (menorTamanho < RADICAL_MIN_LEN) return { match: false, confiancaAlta: false };
-
-    const radicalBate = a.slice(0, RADICAL_MIN_LEN) === b.slice(0, RADICAL_MIN_LEN);
-    return { match: radicalBate, confiancaAlta: false };
-}
-
-// Wrapper booleano simples — usado onde só interessa saber SE bateu,
-// sem precisar do nível de confiança (ex: encontrarCategoriaCorrespondente).
-function textoContemOuEhContido(a, b) {
-    return avaliarCorrespondencia(a, b).match;
-}
-
-// ══════════════════════════════════════════════════════════════
-// GRUPOS SEMÂNTICOS — VÁRIOS TERMOS DIFERENTES, UMA SÓ CATEGORIA
-// ══════════════════════════════════════════════════════════════
-/**
- * Resolve o caso de itens que são conceitualmente a mesma coisa mas
- * não compartilham NENHUM texto em comum (ex: "Celular" e
- * "Smartwatch"). Cada grupo tem um nome de categoria CANÔNICO/
- * "guarda-chuva" e uma lista de termos que pertencem a ele. Quando a
- * descrição bate com um desses termos, o sistema procura se já existe
- * uma categoria REAL cadastrada com esse nome canônico (ou algo bem
- * parecido, via substring) e usa ela — nunca inventa nada.
- *
- * Os nomes canônicos abaixo foram escolhidos pra baterem (por
- * substring) com os nomes reais já cadastrados no banco a partir do
- * plano de contas aplicado — ver nota completa no cabeçalho do
- * arquivo.
- */
-const GRUPOS_SEMANTICOS_CATEGORIA = [
-    {
-        categoria: 'Eletrônicos',
-        tipo: 'despesa',
-        grupo: 'estilo_de_vida',
-        termos: [
-            'celular', 'smartphone', 'smartwatch', 'relogio inteligente',
-            'fone de ouvido', 'fone bluetooth', 'fone sem fio', 'headset',
-            'notebook', 'laptop', 'computador', 'tablet', 'ipad',
-            'impressora', 'caixa de som', 'caixa de som portatil',
-            'video game', 'videogame', 'console', 'carregador',
-            'mouse', 'teclado', 'monitor', 'hd externo', 'pendrive'
-        ]
-    },
-    {
-        categoria: 'Beleza e Estética',
-        tipo: 'despesa',
-        grupo: 'estilo_de_vida',
-        termos: [
-            'manicure', 'pedicure', 'unha', 'maquiagem', 'sobrancelha',
-            'depilacao', 'estetica', 'spa', 'massagem', 'salao de beleza',
-            'cilios', 'design de sobrancelha', 'skincare', 'cosmetico'
-        ]
-    },
-    {
-        categoria: 'Roupas e Calçados',
-        tipo: 'despesa',
-        grupo: 'estilo_de_vida',
-        termos: [
-            'roupa', 'sapato', 'tenis', 'calcado', 'vestido', 'camisa',
-            'camiseta', 'calca', 'jaqueta', 'casaco', 'bolsa', 'mochila',
-            'mala de viagem', 'cinto', 'meia', 'sunga', 'biquini'
-        ]
-    },
-    {
-        categoria: 'Manutenção Preventiva do Veículo',
-        tipo: 'despesa',
-        grupo: 'essencial',
-        termos: [
-            'oficina', 'mecanico', 'revisao do carro', 'troca de oleo',
-            'pneu', 'alinhamento', 'balanceamento', 'bateria do carro'
-        ]
-    }
+// Ordem contábil das seções do Plano de Contas — mesma numeração usada
+// no Balancete (1.x Receitas, 2.x Despesas). Ver obterCodigoGrupo() em
+// contabilidade.js, a fonte única de verdade pro código de GRUPO
+// (usado só como fallback pra categorias sem codigo_contabil próprio).
+const ORDEM_PLANO_DE_CONTAS = [
+  { tipo: 'receita', grupo: 'renda' },
+  { tipo: 'receita', grupo: 'transferencia' },
+  { tipo: 'despesa', grupo: 'essencial' },
+  { tipo: 'despesa', grupo: 'estilo_de_vida' },
+  { tipo: 'despesa', grupo: 'investimento' },
+  { tipo: 'despesa', grupo: 'divida' },
+  { tipo: 'despesa', grupo: 'transferencia' },
 ];
 
+function normalizarTextoBusca(txt) {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function initCategorias() {
+  document.getElementById('btn-add-categoria')
+    ?.addEventListener('click', () => abrirModalCategoria(null));
+
+  document.getElementById('btn-salvar-categoria')
+    ?.addEventListener('click', salvarCategoria);
+
+  document.getElementById('categoria-tipo')
+    ?.addEventListener('change', atualizarOpcoesDeGrupo);
+
+  document.getElementById('categoria-busca')
+    ?.addEventListener('input', (e) => renderCategoriasFiltradas(e.target.value));
+
+  document.getElementById('btn-confirmar-mesclagem')
+    ?.addEventListener('click', confirmarMesclagemCategoria);
+
+  window.addEventListener('section:change', ({ detail }) => {
+    if (detail.section === 'categorias') renderCategorias();
+  });
+
+  renderCategorias();
+}
+
+async function renderCategorias() {
+  const grid = document.getElementById('categorias-grid');
+  if (!grid) return;
+  grid.innerHTML = '<p class="empty-state">Carregando...</p>';
+
+  if (!allClientes.length) await loadAllClientes();
+
+  const { data, error } = await supabaseClient
+    .from('categorias')
+    .select('id, nome, tipo, grupo, cliente_id, revisado, palavras_chave, codigo_contabil')
+    .order('tipo', { ascending: false }) // receita antes de despesa
+    .order('grupo')
+    .order('nome');
+
+  if (error) {
+    grid.innerHTML = `<p class="empty-state">Erro ao carregar: ${error.message}</p>`;
+    console.error('❌ renderCategorias:', error.message);
+    return;
+  }
+
+  categoriasCache = data || [];
+
+  renderPendentesRevisao();
+
+  const campoBusca = document.getElementById('categoria-busca');
+  renderCategoriasFiltradas(campoBusca?.value || '');
+}
+
+// ── Pendentes de Contabilização ─────────────────────────────────
+function renderPendentesRevisao() {
+  const grid = document.getElementById('pendentes-revisao-grid');
+  const bloco = document.getElementById('pendentes-revisao-bloco');
+  if (!grid || !bloco) return;
+
+  const pendentes = categoriasCache.filter(c => c.revisado === false);
+
+  if (!pendentes.length) {
+    bloco.classList.add('hidden');
+    grid.innerHTML = '';
+    return;
+  }
+
+  bloco.classList.remove('hidden');
+
+  grid.innerHTML = pendentes.map(c => {
+    const cliente   = allClientes.find(cl => cl.id === c.cliente_id);
+    const isReceita = c.tipo === 'receita';
+
+    // Código/seção contábil pra onde essa categoria provavelmente vai
+    // cair assim que for confirmada — só um preview, não altera nada
+    // no banco (a confirmação continua exatamente igual a antes).
+    const infoGrupo = (typeof obterCodigoGrupo === 'function')
+      ? obterCodigoGrupo(c.tipo, c.grupo)
+      : null;
+    const sugestaoLabel = infoGrupo
+      ? `${infoGrupo.codigo} — ${infoGrupo.label}`
+      : (GRUPO_LABEL[c.grupo] || c.grupo || 'sem grupo');
+
+    return `
+      <div class="card card--pendente" data-cat-id="${c.id}">
+        <div class="card-header-row">
+          <div>
+            <p class="card-name">${c.nome}</p>
+            <p class="card-sub">Criada por ${cliente?.nome || 'cliente desconhecido'}</p>
+            <p class="card-sub">Sugestão atual: ${sugestaoLabel}</p>
+          </div>
+          <span class="risk-badge ${isReceita ? 'verde' : 'cinza'}">${isReceita ? 'Receita' : 'Despesa'}</span>
+        </div>
+        <div class="card-actions">
+          <button class="btn-card editar btn-ajustar-pendente" data-id="${c.id}">✏️ Ajustar</button>
+          <button class="btn-card confirmar btn-confirmar-pendente" data-id="${c.id}" data-nome="${c.nome}">✓ Confirmar</button>
+        </div>
+        <div class="card-actions">
+          <button class="btn-card mesclar btn-mesclar" data-id="${c.id}" data-nome="${c.nome}">🔀 Mesclar em outra categoria</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  grid.querySelectorAll('.btn-ajustar-pendente').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cat = categoriasCache.find(c => c.id === btn.dataset.id);
+      if (cat) abrirModalCategoria(cat);
+    });
+  });
+
+  grid.querySelectorAll('.btn-confirmar-pendente').forEach(btn => {
+    btn.addEventListener('click', (e) => confirmarPendenteSemAlterar(btn.dataset.id, btn.dataset.nome, e.currentTarget));
+  });
+
+  grid.querySelectorAll('.btn-mesclar').forEach(btn => {
+    btn.addEventListener('click', () => abrirModalMesclarCategoria(btn.dataset.id, btn.dataset.nome));
+  });
+}
+
 /**
- * Procura, na lista curada acima, um grupo semântico cujo termo bata
- * com o texto digitado (substring bidirecional simples — aqui não
- * precisa de radical, porque os termos já são curados e específicos o
- * bastante pra não gerar falso positivo). Retorna o grupo inteiro
- * ({ categoria, tipo, grupo, termos }) ou null.
+ * Aprova a classificação atual (grupo sugerido) sem abrir o modal.
+ * ATUALIZAÇÃO DE PERFORMANCE: aplica a mudança primeiro na UI (local,
+ * instantâneo) e só depois confirma no servidor — se o servidor
+ * recusar, reverte e avisa.
  */
-function encontrarGrupoSemantico(texto) {
-    const alvo = normalizarTexto(texto);
-    if (!alvo) return null;
+async function confirmarPendenteSemAlterar(id, nome, botaoClicado) {
+  const cat = categoriasCache.find(c => c.id === id);
+  if (!cat) return;
 
-    for (const grupoSemantico of GRUPOS_SEMANTICOS_CATEGORIA) {
-        const bateu = grupoSemantico.termos.some(termo => {
-            const termoNormalizado = normalizarTexto(termo);
-            return alvo.includes(termoNormalizado) || termoNormalizado.includes(alvo);
-        });
-        if (bateu) return grupoSemantico;
+  if (botaoClicado) { botaoClicado.disabled = true; botaoClicado.textContent = '✓ Confirmando...'; }
+
+  const valorAnterior = cat.revisado;
+  cat.revisado = true;
+  renderPendentesRevisao();
+  renderCategoriasFiltradas(document.getElementById('categoria-busca')?.value || '');
+  showToast(`"${nome}" confirmada!`);
+
+  const { error } = await supabaseClient
+    .from('categorias')
+    .update({ revisado: true })
+    .eq('id', id);
+
+  if (error) {
+    const catAtual = categoriasCache.find(c => c.id === id);
+    if (catAtual) catAtual.revisado = valorAnterior;
+    renderPendentesRevisao();
+    renderCategoriasFiltradas(document.getElementById('categoria-busca')?.value || '');
+    showToast('Erro ao confirmar no servidor: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Renderiza a grade principal de categorias agrupada por SEÇÃO
+ * CONTÁBIL (estilo plano de contas real) em vez de uma lista plana.
+ */
+function renderCategoriasFiltradas(termoBusca) {
+  const grid  = document.getElementById('categorias-grid');
+  if (!grid) return;
+
+  const termo = normalizarTextoBusca(termoBusca);
+  const lista = termo
+    ? categoriasCache.filter(c => normalizarTextoBusca(c.nome).includes(termo))
+    : categoriasCache;
+
+  if (!categoriasCache.length) {
+    grid.innerHTML = `
+      <p class="empty-state">
+        Nenhuma categoria cadastrada ainda.<br>
+        Sem categorias aqui, os clientes NÃO conseguem registrar transações.<br>
+        Clique em "+ Adicionar Categoria" para começar.
+      </p>`;
+    return;
+  }
+
+  if (!lista.length) {
+    grid.innerHTML = `<p class="empty-state">Nenhuma categoria encontrada para "${termoBusca}".</p>`;
+    return;
+  }
+
+  let html = '';
+
+  ORDEM_PLANO_DE_CONTAS.forEach(({ tipo, grupo }) => {
+    const itensDoGrupo = lista.filter(c => c.tipo === tipo && c.grupo === grupo);
+    if (!itensDoGrupo.length) return;
+
+    const infoGrupo = (typeof obterCodigoGrupo === 'function')
+      ? obterCodigoGrupo(tipo, grupo)
+      : { codigo: '', label: GRUPO_LABEL[grupo] || grupo };
+
+    html += montarSecaoPlanoDeContas(infoGrupo, itensDoGrupo);
+  });
+
+  const chavesConhecidas = new Set(ORDEM_PLANO_DE_CONTAS.map(g => `${g.tipo}__${g.grupo}`));
+  const orfas = lista.filter(c => !chavesConhecidas.has(`${c.tipo}__${c.grupo}`));
+  if (orfas.length) {
+    html += montarSecaoPlanoDeContas({ codigo: '9', label: 'Outras / Sem Grupo Definido' }, orfas);
+  }
+
+  grid.innerHTML = html;
+
+  grid.querySelectorAll('.btn-card.editar').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const { data: c, error } = await supabaseClient
+        .from('categorias').select('*').eq('id', btn.dataset.id).single();
+      if (error) { showToast('Erro ao carregar categoria: ' + error.message, 'error'); return; }
+      if (c) abrirModalCategoria(c);
+    });
+  });
+
+  grid.querySelectorAll('.btn-card.deletar').forEach(btn => {
+    btn.addEventListener('click', () => confirmarDeletarCategoria(btn.dataset.id, btn.dataset.nome));
+  });
+
+  grid.querySelectorAll('.btn-card.mesclar').forEach(btn => {
+    btn.addEventListener('click', () => abrirModalMesclarCategoria(btn.dataset.id, btn.dataset.nome));
+  });
+}
+
+/**
+ * Ordena os itens de uma seção: primeiro pelo `codigo_contabil` REAL
+ * (quando existe — string compara certo até 2 dígitos por segmento,
+ * que é o que o plano de contas atual usa), com quem não tem código
+ * ficando por último e ordenado só por nome.
+ */
+function montarSecaoPlanoDeContas(infoGrupo, itens) {
+  const itensOrdenados = [...itens].sort((a, b) => {
+    if (a.codigo_contabil && b.codigo_contabil) {
+      return a.codigo_contabil.localeCompare(b.codigo_contabil, 'pt-BR', { numeric: true });
     }
+    if (a.codigo_contabil) return -1;
+    if (b.codigo_contabil) return 1;
+    return a.nome.localeCompare(b.nome, 'pt-BR');
+  });
 
-    return null;
+  return `
+    <div class="plano-contas-secao">
+      <div class="plano-contas-secao__header">
+        <span class="plano-contas-secao__codigo">${infoGrupo.codigo}</span>
+        <span class="plano-contas-secao__label">${infoGrupo.label}</span>
+        <span class="plano-contas-secao__contador">${itens.length} conta${itens.length > 1 ? 's' : ''}</span>
+      </div>
+      <div class="plano-contas-secao__grid">
+        ${itensOrdenados.map((c, idx) => renderCardCategoria(c, infoGrupo.codigo, idx + 1)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * @param {string} codigoGrupoFallback - código do GRUPO (ex: "2.1"),
+ *   usado só se a categoria não tiver `codigo_contabil` próprio salvo.
+ * @param {number} indiceFallback - posição dentro da seção, usada só
+ *   pra montar o código de fallback (ex: "2.1.03").
+ */
+function renderCardCategoria(c, codigoGrupoFallback, indiceFallback) {
+  const isReceita   = c.tipo === 'receita';
+  const cliente      = c.cliente_id ? allClientes.find(cl => cl.id === c.cliente_id) : null;
+  const qtdSinonimos = Array.isArray(c.palavras_chave) ? c.palavras_chave.length : 0;
+
+  // Prioriza o código REAL salvo no banco (plano de contas do
+  // modelo); só usa o código calculado por posição quando a categoria
+  // não tem codigo_contabil próprio (ex: categorias mais antigas ou
+  // criadas por clientes, que ainda não foram encaixadas no modelo).
+  const codigoConta = c.codigo_contabil
+    ? c.codigo_contabil
+    : (codigoGrupoFallback ? `${codigoGrupoFallback}.${String(indiceFallback).padStart(2, '0')}` : '');
+
+  return `
+    <div class="card">
+      <div class="card-header-row">
+        <div>
+          <p class="card-name">${codigoConta ? `<span class="conta-codigo">${codigoConta}</span>` : ''}${c.nome}</p>
+          <p class="card-sub">${cliente ? `pessoal de ${cliente.nome}` : 'Categoria global'}</p>
+          ${qtdSinonimos > 0 ? `<p class="card-sub">🔑 ${qtdSinonimos} sinônimo${qtdSinonimos > 1 ? 's' : ''} cadastrado${qtdSinonimos > 1 ? 's' : ''}</p>` : ''}
+        </div>
+        <span class="risk-badge ${isReceita ? 'verde' : 'cinza'}">${isReceita ? 'Receita' : 'Despesa'}</span>
+      </div>
+      <div class="card-actions">
+        <button class="btn-card editar" data-id="${c.id}">✏️ Editar</button>
+        <button class="btn-card deletar" data-id="${c.id}" data-nome="${c.nome}">🗑️ Deletar</button>
+      </div>
+      <div class="card-actions">
+        <button class="btn-card mesclar" data-id="${c.id}" data-nome="${c.nome}">🔀 Mesclar</button>
+      </div>
+    </div>
+  `;
+}
+
+function abrirModalCategoria(item) {
+  categoriaEmEdicao = item;
+
+  document.getElementById('modal-categoria-title').textContent =
+    item ? '✏️ Editar Categoria' : '🏷️ Adicionar Categoria';
+
+  document.getElementById('categoria-id').value   = item?.id   || '';
+  document.getElementById('categoria-nome').value = item?.nome || '';
+  document.getElementById('categoria-tipo').value = item?.tipo || 'receita';
+
+  const campoPalavrasChave = document.getElementById('categoria-palavras-chave');
+  if (campoPalavrasChave) {
+    campoPalavrasChave.value = Array.isArray(item?.palavras_chave) ? item.palavras_chave.join(', ') : '';
+  }
+
+  const campoCodigo = document.getElementById('categoria-codigo-contabil');
+  if (campoCodigo) {
+    campoCodigo.value = item?.codigo_contabil || '';
+  }
+
+  atualizarOpcoesDeGrupo(item?.grupo);
+  openModal('modal-categoria');
+}
+
+function atualizarOpcoesDeGrupo(grupoSelecionado) {
+  const tipo   = document.getElementById('categoria-tipo').value;
+  const select = document.getElementById('categoria-grupo');
+  const opcoes = GRUPOS_POR_TIPO[tipo] || [];
+
+  select.innerHTML = opcoes.map(o =>
+    `<option value="${o.value}" ${grupoSelecionado === o.value ? 'selected' : ''}>${o.label}</option>`
+  ).join('');
+}
+
+async function salvarCategoria() {
+  const id    = document.getElementById('categoria-id').value;
+  const nome  = document.getElementById('categoria-nome').value.trim();
+  const tipo  = document.getElementById('categoria-tipo').value;
+  const grupo = document.getElementById('categoria-grupo').value;
+  const codigoContabil = document.getElementById('categoria-codigo-contabil')?.value.trim() || null;
+
+  const palavrasChaveTexto = document.getElementById('categoria-palavras-chave')?.value.trim() || '';
+  const palavrasChave = palavrasChaveTexto
+    ? [...new Set(palavrasChaveTexto.split(',').map(p => p.trim()).filter(Boolean))]
+    : [];
+
+  if (!nome)  { showToast('Informe o nome da categoria.', 'error'); return; }
+  if (!grupo) { showToast('Selecione um grupo.', 'error'); return; }
+
+  const payload = { nome, tipo, grupo, revisado: true, palavras_chave: palavrasChave, codigo_contabil: codigoContabil };
+
+  const btn = document.getElementById('btn-salvar-categoria');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+
+  let error;
+  if (id) {
+    ({ error } = await supabaseClient.from('categorias').update(payload).eq('id', id));
+  } else {
+    ({ error } = await supabaseClient.from('categorias').insert(payload));
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Salvar'; }
+
+  if (error) {
+    showToast('Erro ao salvar: ' + error.message, 'error');
+    return;
+  }
+
+  showToast(id ? 'Categoria atualizada!' : 'Categoria adicionada!');
+  closeModal('modal-categoria');
+  renderCategorias();
+}
+
+async function confirmarDeletarCategoria(id, nome) {
+  if (!confirm(`Tem certeza que deseja deletar a categoria "${nome}"? Transações que já usam essa categoria podem ficar órfãs. Se o objetivo é juntar com outra categoria, use "🔀 Mesclar" em vez de deletar.`)) return;
+
+  const { error } = await supabaseClient.from('categorias').delete().eq('id', id);
+
+  if (error) {
+    showToast('Erro ao deletar (pode haver transações usando essa categoria): ' + error.message, 'error');
+    return;
+  }
+
+  showToast('Categoria removida.');
+  renderCategorias();
 }
 
 // ══════════════════════════════════════════════════════════════
-// PLANO DE CONTAS ROBUSTO — MATCH POR PALAVRA-CHAVE/SINÔNIMO
+// MESCLAR CATEGORIAS
 // ══════════════════════════════════════════════════════════════
 /**
- * Procura, dentre as categorias REAIS já cadastradas, alguma que
- * reconheça a descrição digitada, em 3 passadas (da mais pra menos
- * confiável):
- *   1. Sinônimo cadastrado pelo admin em `palavras_chave`.
- *   2. Nome da própria categoria.
- *   3. Grupo semântico curado (GRUPOS_SEMANTICOS_CATEGORIA).
- *
- * Retorna a categoria encontrada com um campo extra `_confiancaAlta`.
- * Retorna null se nada bater em nenhuma das 3 passadas.
+ * Consolida duas categorias que acabaram virando a mesma coisa (ex:
+ * "Unha" e "Manicure"). Move TODAS as transações e regras aprendidas
+ * da categoria de ORIGEM pra categoria de DESTINO, depois apaga a
+ * origem. Só oferece como destino categorias do MESMO tipo
+ * (receita/despesa) da origem, pra nunca misturar uma conta de
+ * entrada com uma de saída.
  */
-function encontrarCategoriaPorPalavraChave(categorias, descricao) {
-    const alvo = normalizarTexto(descricao);
-    if (!alvo || !categorias || !categorias.length) return null;
+function abrirModalMesclarCategoria(origemId, origemNome) {
+  const origemCat = categoriasCache.find(c => c.id === origemId);
+  if (!origemCat) { showToast('Categoria não encontrada — recarregue a página.', 'error'); return; }
 
-    const melhorPorPassada = (fonteDeTermo) => {
-        let melhorMatch = null; // { cat, confiancaAlta }
-        for (const cat of categorias) {
-            const termos = fonteDeTermo(cat);
-            for (const termoBruto of termos) {
-                const termo = normalizarTexto(termoBruto);
-                if (!termo) continue;
-                const resultado = avaliarCorrespondencia(alvo, termo);
-                if (!resultado.match) continue;
+  document.getElementById('mesclar-origem-id').value = origemId;
+  document.getElementById('mesclar-origem-descricao').textContent =
+    `Mover todas as transações de "${origemNome}" para:`;
 
-                if (resultado.confiancaAlta) {
-                    return { cat, confiancaAlta: true };
-                }
-                if (!melhorMatch) melhorMatch = { cat, confiancaAlta: false };
-            }
-        }
-        return melhorMatch;
-    };
+  const select = document.getElementById('mesclar-destino-select');
+  const candidatas = categoriasCache.filter(c => c.id !== origemId && c.tipo === origemCat.tipo);
 
-    // 1ª passada: sinônimos cadastrados pelo admin (palavras_chave)
-    const porSinonimo = melhorPorPassada(cat => Array.isArray(cat.palavras_chave) ? cat.palavras_chave : []);
-    if (porSinonimo) return { ...porSinonimo.cat, _confiancaAlta: porSinonimo.confiancaAlta };
+  if (!candidatas.length) {
+    select.innerHTML = '<option value="">Nenhuma outra categoria do mesmo tipo disponível</option>';
+  } else {
+    select.innerHTML = candidatas
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+      .map(c => `<option value="${c.id}">${c.codigo_contabil ? `[${c.codigo_contabil}] ` : ''}${c.nome}</option>`)
+      .join('');
+  }
 
-    // 2ª passada: nome da própria categoria
-    const porNome = melhorPorPassada(cat => [cat.nome]);
-    if (porNome) return { ...porNome.cat, _confiancaAlta: porNome.confiancaAlta };
-
-    // 3ª passada: GRUPO SEMÂNTICO — só entra em ação se já existir uma
-    // categoria REAL cadastrada com o nome canônico do grupo (ou
-    // parecido) — nunca inventa uma categoria. Sempre confiança
-    // aproximada, é uma inferência de significado, não texto batendo.
-    const grupoSemantico = encontrarGrupoSemantico(alvo);
-    if (grupoSemantico) {
-        const nomeCanonico = normalizarTexto(grupoSemantico.categoria);
-        const categoriaCanonica = categorias.find(c =>
-            c.tipo === grupoSemantico.tipo && textoContemOuEhContido(normalizarTexto(c.nome), nomeCanonico)
-        );
-        if (categoriaCanonica) {
-            return { ...categoriaCanonica, _confiancaAlta: false };
-        }
-    }
-
-    return null;
+  openModal('modal-mesclar-categoria');
 }
 
-// ══════════════════════════════════════════════════════════════
-// CLASSIFICADOR LOCAL POR PALAVRAS-CHAVE (heurística fixa no código)
-// ══════════════════════════════════════════════════════════════
-const REGRAS_CLASSIFICACAO_LOCAL = [
-    // ── Receitas (renda) ──
-    [/sal[aá]rio|holerite|pr[oó]-labore/i,                          'receita', 'Salário'],
-    [/freelance|freela|bico|consultoria/i,                          'receita', 'Freelance'],
-    [/dividendo|jcp|rendimento/i,                                   'receita', 'Dividendos'],
-    [/renda extra|extra\b/i,                                        'receita', 'Renda Extra'],
-    [/13[oº]|decimo terceiro/i,                                     'receita', '13º Salário'],
-    [/restitui[çc][aã]o/i,                                          'receita', 'Restituição de Imposto de Renda'],
+async function confirmarMesclagemCategoria() {
+  const origemId  = document.getElementById('mesclar-origem-id').value;
+  const destinoId = document.getElementById('mesclar-destino-select').value;
 
-    // ── Investimento ──
-    [/previd[eê]ncia/i,                                             'despesa', 'Previdência Privada'],
-    [/reserva|poupan[çc]a|emerg[eê]ncia|tesouro selic|cdb/i,        'despesa', 'Reserva de Emergência'],
-    [/investimento|aporte|a[çc][oõ]es|fii\b/i,                      'despesa', 'Aporte em Investimentos'],
+  if (!origemId || !destinoId) { showToast('Selecione a categoria de destino.', 'error'); return; }
+  if (origemId === destinoId)  { showToast('A categoria de destino precisa ser diferente da origem.', 'error'); return; }
 
-    // ── Essencial ──
-    [/luz|energia el[eé]trica/i,                                    'despesa', 'Energia Elétrica'],
-    [/[aá]gua|esgoto/i,                                              'despesa', 'Água e Esgoto'],
-    [/g[aá]s\b|botijao/i,                                            'despesa', 'Gás'],
-    [/internet|banda larga|wifi/i,                                   'despesa', 'Internet Banda Larga'],
-    [/aluguel|financiamento imobiliario/i,                          'despesa', 'Aluguel ou Financiamento Imobiliário'],
-    [/condominio/i,                                                  'despesa', 'Condomínio'],
-    [/iptu/i,                                                        'despesa', 'IPTU'],
-    [/mercado|supermercado/i,                                        'despesa', 'Supermercado'],
-    [/feira|sacolao|hortifruti/i,                                    'despesa', 'Feira e Sacolão'],
-    [/a[çc]ougue|peixaria/i,                                         'despesa', 'Açougue e Peixaria'],
-    [/farm[aá]cia|rem[eé]dio|medicamento/i,                          'despesa', 'Medicamentos de Uso Contínuo'],
-    [/plano de sa[uú]de|convenio medico|odontologico/i,              'despesa', 'Plano de Saúde / Odontológico'],
-    [/consulta|exame|m[eé]dico|dentista/i,                           'despesa', 'Consultas e Exames'],
-    [/faculdade|mensalidade|pos gradua[çc][aã]o/i,                   'despesa', 'Mensalidade Faculdade'],
-    [/curso|livro tecnico/i,                                         'despesa', 'Cursos Livres e Livros Técnicos'],
-    [/combust[ií]vel|gasolina|posto|alcool|etanol|gnv/i,             'despesa', 'Combustível'],
-    [/seguro do carro|seguro auto/i,                                 'despesa', 'Seguro Auto'],
-    [/ipva|licenciamento/i,                                          'despesa', 'IPVA e Licenciamento'],
-    [/oficina|mec[aâ]nico|revis[aã]o do carro|troca de [oó]leo|pneu|alinhamento|balanceamento/i, 'despesa', 'Manutenção Preventiva do Veículo'],
-    [/[oô]nibus|uber|99\b|metr[oô]|passagem de [oô]nibus/i,          'despesa', 'Transporte Público'],
-    [/veterinario|racao|vacina do pet/i,                             'despesa', 'Pet: Ração, Veterinário e Vacinas'],
+  const origemCat  = categoriasCache.find(c => c.id === origemId);
+  const destinoCat = categoriasCache.find(c => c.id === destinoId);
 
-    // ── Estilo de vida ──
-    [/restaurante|bar\b/i,                                           'despesa', 'Restaurantes e Bares'],
-    [/ifood|delivery|rappi/i,                                        'despesa', 'Delivery'],
-    [/cafe\b|cafeteria|padaria/i,                                    'despesa', 'Cafés'],
-    [/cinema|show|teatro/i,                                          'despesa', 'Cinema e Shows'],
-    [/balada|festa|boate/i,                                          'despesa', 'Baladas'],
-    [/streaming|netflix|spotify|assinatura/i,                        'despesa', 'Streaming e Assinaturas'],
-    [/viagem|hotel|passagem|airbnb/i,                                'despesa', 'Viagens'],
-    [/academia|personal trainer|crossfit|pilates/i,                  'despesa', 'Academia'],
-    [/presente|doacao|caridade/i,                                    'despesa', 'Presentes e Doações'],
-    [/celular|smartphone|notebook|tablet|fone de ouvido|video ?game/i, 'despesa', 'Eletrônicos e Gadgets'],
-    [/manicure|pedicure|unha|maquiagem|sobrancelha|estetica/i,      'despesa', 'Salão de Beleza e Estética'],
-    [/roupa|sapato|tenis|cal[çc]ado|mala de viagem/i,                'despesa', 'Roupas e Calçados'],
-];
+  if (!confirm(`Mesclar "${origemCat?.nome}" em "${destinoCat?.nome}"?\n\nTodas as transações e regras aprendidas serão movidas, e "${origemCat?.nome}" será DELETADA. Esta ação não pode ser desfeita.`)) {
+    return;
+  }
 
-function classificarLocalmente(descricao) {
-    const regra = REGRAS_CLASSIFICACAO_LOCAL.find(([regex]) => regex.test(descricao));
+  const btn = document.getElementById('btn-confirmar-mesclagem');
+  if (btn) { btn.disabled = true; btn.textContent = 'Mesclando...'; }
 
-    if (!regra) return null;
+  try {
+    const { error: errTransacoes } = await supabaseClient
+      .from('transacoes')
+      .update({ categoria_id: destinoId })
+      .eq('categoria_id', origemId);
+    if (errTransacoes) throw errTransacoes;
 
-    const [, tipo, nomeCategoria] = regra;
-    return {
-        tipo,
-        categoriaNome: nomeCategoria,
-        fallback: true,
-        local:    true
-    };
+    const { error: errRegras } = await supabaseClient
+      .from('regras_aprendidas')
+      .update({ categoria_id: destinoId })
+      .eq('categoria_id', origemId);
+    if (errRegras) throw errRegras;
+
+    const { error: errDelete } = await supabaseClient
+      .from('categorias')
+      .delete()
+      .eq('id', origemId);
+    if (errDelete) throw errDelete;
+
+    showToast(`"${origemCat?.nome}" mesclada em "${destinoCat?.nome}"!`);
+    closeModal('modal-mesclar-categoria');
+    renderCategorias();
+  } catch (err) {
+    showToast('Erro ao mesclar: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Mesclar e Deletar Origem'; }
+  }
 }
 
-// ══════════════════════════════════════════════════════════════
-// SMART DATE
-// ══════════════════════════════════════════════════════════════
-function getDataDeHojeFormatoInput() {
-    const agora = new Date();
-    const ano   = agora.getFullYear();
-    const mes   = String(agora.getMonth() + 1).padStart(2, '0');
-    const dia   = String(agora.getDate()).padStart(2, '0');
-    return `${ano}-${mes}-${dia}`;
-}
-
-function setSmartDate(forcar = false) {
-    const campoData = document.getElementById('transDate');
-    if (!campoData) return;
-
-    if (forcar || !campoData.value) {
-        campoData.value = getDataDeHojeFormatoInput();
-    }
-
-    TransactionFormState.data = campoData.value;
-}
-
-// ══════════════════════════════════════════════════════════════
-// CATEGORIAS: BUSCA COM CACHE + MATCHING SEGURO
-// ══════════════════════════════════════════════════════════════
-
-async function getCategoriasParaClassificacao(forcarRecarga = false) {
-    if (!forcarRecarga && smartInputCategoriasCache && smartInputCategoriasCache.length) {
-        return smartInputCategoriasCache;
-    }
-    try {
-        smartInputCategoriasCache = await DatabaseModule.getCategorias();
-    } catch (err) {
-        console.error('❌ getCategoriasParaClassificacao:', err.message);
-        smartInputCategoriasCache = smartInputCategoriasCache || [];
-    }
-    return smartInputCategoriasCache;
-}
-
-function encontrarCategoriaCorrespondente(categorias, nomeSugerido, tipoSugerido) {
-    if (!categorias || !categorias.length) return null;
-    const nomeAlvo = normalizarTexto(nomeSugerido);
-
-    let match = categorias.find(c =>
-        c.tipo === tipoSugerido && normalizarTexto(c.nome) === nomeAlvo
-    );
-    if (match) return match;
-
-    match = categorias.find(c => {
-        if (c.tipo !== tipoSugerido) return false;
-        return textoContemOuEhContido(nomeAlvo, normalizarTexto(c.nome));
-    });
-    if (match) return match;
-
-    return null;
-}
-
-// ══════════════════════════════════════════════════════════════
-// FEEDBACK VISUAL NO DROPDOWN DE CATEGORIA
-// ══════════════════════════════════════════════════════════════
-
-function setSmartInputEstadoVisual(estado, texto) {
-    const trigger     = document.getElementById('transCategoryTrigger');
-    const triggerText = document.getElementById('transCategoryTriggerText');
-    if (!trigger || !triggerText) return;
-
-    if (estado === 'carregando') {
-        triggerText.textContent = '🤖 Analisando descrição...';
-        trigger.disabled = true;
-    } else if (estado === 'sugestao') {
-        triggerText.textContent = `🤖 ${texto}`;
-        trigger.disabled = false;
-    } else if (estado === 'sem-match') {
-        triggerText.textContent = texto || 'Não identifiquei a categoria — selecione manualmente';
-        trigger.disabled = false;
-    } else {
-        trigger.disabled = false;
-    }
-}
-
-function marcarOpcaoSelecionadaNoPainel(categoriaId) {
-    const panel = document.getElementById('transCategoryPanel');
-    if (!panel) return;
-    panel.querySelectorAll('.custom-select__option.selected')
-        .forEach(el => el.classList.remove('selected'));
-    panel.querySelector(`.custom-select__option[data-id="${categoriaId}"]`)
-        ?.classList.add('selected');
-}
-
-async function preencherFormularioComClassificacao(resultado) {
-    const hiddenInput = document.getElementById('transCategory');
-    if (!hiddenInput) return;
-
-    const categorias = await getCategoriasParaClassificacao();
-    const match = encontrarCategoriaCorrespondente(categorias, resultado.categoriaNome, resultado.tipo);
-
-    if (match) {
-        hiddenInput.value = match.id;
-        marcarOpcaoSelecionadaNoPainel(match.id);
-
-        const nomeExibido = resultado.confiancaAlta === false ? `${match.nome} (confira)` : match.nome;
-        setSmartInputEstadoVisual('sugestao', nomeExibido);
-
-        TransactionFormState.tipo          = match.tipo;
-        TransactionFormState.categoriaId   = match.id;
-        TransactionFormState.categoriaNome = match.nome;
-
-        if (resultado.palavraChave) {
-            if (resultado.confiancaAlta === false) {
-                UIModule.showMessage(`🔎 Sugestão por semelhança: ${match.nome} — confira antes de salvar`, 'info', 4500);
-            } else {
-                UIModule.showMessage(`🔑 Categoria reconhecida por sinônimo: ${match.nome}`, 'success', 2500);
-            }
-        } else if (resultado.local) {
-            UIModule.showMessage(`🤖 Categoria sugerida: ${match.nome}`, 'success', 2500);
-        } else if (resultado.fallback) {
-            UIModule.showMessage(
-                'Não consegui identificar a categoria com certeza. Confira antes de salvar.',
-                'info',
-                4000
-            );
-        } else {
-            UIModule.showMessage(`🤖 Categoria sugerida: ${match.nome}`, 'success', 2500);
-        }
-
-        if (typeof atualizarSeletorDeMeta === 'function') {
-            atualizarSeletorDeMeta('transCategory', 'transMetaWrapper', 'transMeta');
-        }
-    } else {
-        hiddenInput.value = '';
-        setSmartInputEstadoVisual('sem-match');
-
-        TransactionFormState.tipo          = null;
-        TransactionFormState.categoriaId   = null;
-        TransactionFormState.categoriaNome = null;
-
-        UIModule.showError('Não consegui sugerir uma categoria para essa descrição. Selecione manualmente.');
-    }
-}
-
-// ══════════════════════════════════════════════════════════════
-// AUTOCLASSIFY — núcleo do Smart Input
-// ══════════════════════════════════════════════════════════════
-async function autoClassify(description) {
-    const descricao = (description || '').trim();
-    TransactionFormState.descricao = descricao;
-
-    if (descricao.length < 3) {
-        return null;
-    }
-
-    if (descricao === smartInputUltimaDescricao) {
-        return null;
-    }
-
-    const execucao = (async () => {
-        setSmartInputEstadoVisual('carregando');
-
-        let resultado = null;
-
-        // 1) Palavras-chave/sinônimos/nome/grupo semântico
-        const categoriasDisponiveis = await getCategoriasParaClassificacao();
-        const categoriaPorSinonimo  = encontrarCategoriaPorPalavraChave(categoriasDisponiveis, descricao);
-        if (categoriaPorSinonimo) {
-            resultado = {
-                tipo:          categoriaPorSinonimo.tipo,
-                categoriaNome: categoriaPorSinonimo.nome,
-                fallback:      false,
-                local:         false,
-                palavraChave:  true,
-                confiancaAlta: categoriaPorSinonimo._confiancaAlta
-            };
-        }
-
-        // 2) Tenta o endpoint de IA real (placeholder por enquanto)
-        if (!resultado) {
-            try {
-                const response = await fetch('/api/classify', {
-                    method:  'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body:    JSON.stringify({ description: descricao })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Endpoint /api/classify retornou HTTP ${response.status}`);
-                }
-
-                const data = await response.json();
-
-                const tipoValido     = data?.type === 'receita' || data?.type === 'despesa';
-                const grupoValido    = GRUPOS_VALIDOS.includes(data?.group);
-                const categoriaOk    = typeof data?.category === 'string' && data.category.trim().length > 0;
-                const confiancaBaixa = typeof data?.confidence === 'number' && data.confidence < 0.4;
-
-                if (!tipoValido || !grupoValido || !categoriaOk || confiancaBaixa) {
-                    throw new Error('Resposta da IA incompleta ou de baixa confiança.');
-                }
-
-                resultado = {
-                    tipo:          data.type,
-                    categoriaNome: data.category.trim(),
-                    fallback:      false,
-                    local:         false
-                };
-            } catch (err) {
-                console.warn('⚠️ /api/classify indisponível, tentando classificador local:', err.message);
-            }
-        }
-
-        // 3) Endpoint falhou (ou ainda não existe) — tenta o classificador local
-        if (!resultado) {
-            resultado = classificarLocalmente(descricao);
-        }
-
-        // 4) Nada reconheceu a descrição — não inventa nada
-        if (!resultado) {
-            setSmartInputEstadoVisual('sem-match');
-            TransactionFormState.tipo          = null;
-            TransactionFormState.categoriaId   = null;
-            TransactionFormState.categoriaNome = null;
-            smartInputUltimaDescricao = descricao;
-            return null;
-        }
-
-        smartInputUltimaDescricao = descricao;
-        await preencherFormularioComClassificacao(resultado);
-        return resultado;
-    })();
-
-    smartInputPromisePendente = execucao;
-    const resultadoFinal = await execucao;
-    if (smartInputPromisePendente === execucao) smartInputPromisePendente = null;
-    return resultadoFinal;
-}
-
-async function autoClassifyTransaction(description) {
-    return autoClassify(description);
-}
-
-async function aguardarClassificacaoSmartInputPendente() {
-    if (smartInputPromisePendente) {
-        try { await smartInputPromisePendente; } catch (_) { /* já tratado internamente */ }
-    }
-}
-
-// ══════════════════════════════════════════════════════════════
-// SINCRONIZAÇÃO DO ESTADO COM O DOM (data, descrição, categoria)
-// ══════════════════════════════════════════════════════════════
-
-let smartInputSincronizacaoLigada = false;
-
-function ligarSincronizacaoDeEstado() {
-    if (smartInputSincronizacaoLigada) return;
-    smartInputSincronizacaoLigada = true;
-
-    const campoData = document.getElementById('transDate');
-    campoData?.addEventListener('change', () => {
-        TransactionFormState.data = campoData.value;
-    });
-
-    const campoDescricao = document.getElementById('transDescription');
-    campoDescricao?.addEventListener('input', () => {
-        TransactionFormState.descricao = campoDescricao.value;
-    });
-
-    const panel = document.getElementById('transCategoryPanel');
-    panel?.addEventListener('click', async (e) => {
-        const opcao = e.target.closest('.custom-select__option');
-        if (!opcao) return;
-
-        TransactionFormState.categoriaId   = opcao.dataset.id;
-        TransactionFormState.categoriaNome = opcao.dataset.nome;
-
-        const categorias = await getCategoriasParaClassificacao();
-        const cat = categorias.find(c => c.id === opcao.dataset.id);
-        TransactionFormState.tipo = cat?.tipo || null;
-    });
-}
-
-// ══════════════════════════════════════════════════════════════
-// INITFORM — ponto de entrada do módulo
-// ══════════════════════════════════════════════════════════════
-
-function initForm(forcarData = false) {
-    setSmartDate(forcarData);
-
-    const campoDescricao = document.getElementById('transDescription');
-    if (campoDescricao && !campoDescricao.dataset.smartInputListenerLigado) {
-        campoDescricao.addEventListener('blur', () => {
-            const valor = campoDescricao.value.trim();
-            if (!valor) return;
-
-            if (typeof registerTransaction === 'function' && typeof ClientModule !== 'undefined') {
-                registerTransaction({ clienteId: ClientModule.getClientId(), descricao: valor });
-            } else {
-                autoClassify(valor);
-            }
-        });
-        campoDescricao.dataset.smartInputListenerLigado = 'true';
-    }
-
-    ligarSincronizacaoDeEstado();
-}
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => initForm(false));
-} else {
-    initForm(false);
-}
-
-console.log('✅ smart-input.js carregado (sinônimos + radical + grupos semânticos alinhados ao plano de contas)');
+console.log('✅ categorias.js carregado (Plano de Contas com código real + Mesclar Categorias)');

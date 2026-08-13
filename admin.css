@@ -1,4 +1,25 @@
+/* ============================================================
+   GESTOR FINANCEIRO PRO — admin.css
+   Design System Darktech — Painel do Administrador
+   CSS Variables definidas aqui. Mobile: sidebar → bottom navbar.
 
+   ATUALIZAÇÃO — PILLS DE PERÍODO (Razonete): .razonete-periodo-pills
+   e .razonete-periodo-pill, filtro rápido de período (Hoje/Ontem/
+   7 dias/Este mês/Mês passado/Tudo) acima dos filtros de Cliente/Tipo.
+
+   ATUALIZAÇÃO — CORREÇÃO DO "VAZAMENTO" DO risk-badge (ATENÇÃO/SEM
+   DADOS) NOS CARDS DE "Dashboards dos Clientes": min-width:0 no
+   container do nome + quebra de palavra no nome/e-mail + flex-wrap no
+   header-row como rede de segurança para nomes realmente extremos.
+
+   ATUALIZAÇÃO — CONTABILIDADE (DRE, BALANCETE, PLANO DE CONTAS):
+   .modal-dashboard__tabs / .dre-* / .balancete-* / .plano-contas-secao*
+   / .modal-ampliado* / .toolbar-* / @media print.
+
+   ATUALIZAÇÃO — MESCLAR CATEGORIAS: .btn-card.mesclar (cor roxa,
+   distinta de editar/deletar/confirmar, pra não confundir uma ação
+   destrutiva-mas-útil com as outras).
+   ============================================================ */
 
 /* ── Variáveis do Design System ─────────────────────────────── */
 :root {
