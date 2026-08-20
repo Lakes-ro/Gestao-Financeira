@@ -3,22 +3,25 @@
    Design System Darktech — Painel do Administrador
    CSS Variables definidas aqui. Mobile: sidebar → bottom navbar.
 
-   ATUALIZAÇÃO — PILLS DE PERÍODO (Razonete): .razonete-periodo-pills
-   e .razonete-periodo-pill, filtro rápido de período (Hoje/Ontem/
-   7 dias/Este mês/Mês passado/Tudo) acima dos filtros de Cliente/Tipo.
+   ATUALIZAÇÃO — CORREÇÃO DO "VAZAMENTO" DO risk-badge, CONTABILIDADE
+   (DRE/BALANCETE/PLANO DE CONTAS), MESCLAR CATEGORIAS — ver
+   comentários detalhados em cada bloco correspondente mais abaixo.
 
-   ATUALIZAÇÃO — CORREÇÃO DO "VAZAMENTO" DO risk-badge (ATENÇÃO/SEM
-   DADOS) NOS CARDS DE "Dashboards dos Clientes": min-width:0 no
-   container do nome + quebra de palavra no nome/e-mail + flex-wrap no
-   header-row como rede de segurança para nomes realmente extremos.
-
-   ATUALIZAÇÃO — CONTABILIDADE (DRE, BALANCETE, PLANO DE CONTAS):
-   .modal-dashboard__tabs / .dre-* / .balancete-* / .plano-contas-secao*
-   / .modal-ampliado* / .toolbar-* / @media print.
-
-   ATUALIZAÇÃO — MESCLAR CATEGORIAS: .btn-card.mesclar (cor roxa,
-   distinta de editar/deletar/confirmar, pra não confundir uma ação
-   destrutiva-mas-útil com as outras).
+   ATUALIZAÇÃO — LANÇAMENTOS PARA CLIENTE (admin lança manual ou
+   importa extrato em nome de qualquer cliente):
+     - .import-status / .import-review__* — portados do style.css do
+       painel do cliente (variáveis traduzidas pro admin.css), porque
+       o modal de importação aqui reaproveita importacao-extrato.js
+       sem alteração nenhuma (mesmos ids de elemento).
+     - .lancamentos-admin__tabs / .lancamentos-admin__tab* — abas
+       "Lançamento Manual"/"Importar Extrato" dentro do modal. Classe
+       PRÓPRIA (não reaproveita .modal-dashboard__tab) de propósito —
+       evita que initModalDashboardTabs() (dashboards.js) also
+       enxergue e ligue eventos duplicados nessas abas.
+     - .form-row-admin — grid de 2 colunas pro Valor/Data do
+       lançamento manual (o resto do admin usa formulários de coluna
+       única, por isso não existia essa classe ainda).
+     - .btn-card.lancamentos — botão novo nos cards de Clientes.
    ============================================================ */
 
 /* ── Variáveis do Design System ─────────────────────────────── */
@@ -362,11 +365,13 @@
 .btn-card.confirmar:hover { background: rgba(0,245,160,0.26); }
 
 /* Mesclar categorias — cor roxa, deliberadamente diferente de
-   editar/deletar/confirmar (é uma ação destrutiva-mas-útil: apaga a
-   origem, mas só depois de mover tudo pra outra categoria já
-   existente — não é a mesma coisa que "Deletar" puro). */
+   editar/deletar/confirmar. */
 .btn-card.mesclar        { background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.3); color: #c084fc; }
 .btn-card.mesclar:hover  { background: rgba(168,85,247,0.24); }
+
+/* Lançamentos (manual/importar extrato) nos cards de Clientes */
+.btn-card.lancamentos       { background: rgba(0,245,160,0.14); border-color: rgba(0,245,160,0.35); color: var(--accent-primary); }
+.btn-card.lancamentos:hover { background: rgba(0,245,160,0.26); }
 
 /* Card de categoria PENDENTE DE CONTABILIZAÇÃO — borda âmbar pra
    chamar atenção visualmente, distinguindo de um card comum. */
@@ -677,6 +682,15 @@
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* Grid de 2 colunas pro Valor/Data do Lançamento Manual (admin) —
+   o resto do admin usa formulário de coluna única, por isso essa
+   classe não existia ainda. */
+.form-row-admin {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--border-default);
@@ -960,6 +974,44 @@
 }
 
 /* ══════════════════════════════════════════════════════════════
+   ABAS DO MODAL "LANÇAMENTOS PARA CLIENTE" — Manual / Importar Extrato
+   Classe PRÓPRIA (não .modal-dashboard__tab) de propósito, pra não
+   colidir com initModalDashboardTabs() (dashboards.js).
+   ══════════════════════════════════════════════════════════════ */
+
+.lancamentos-admin__tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  flex-wrap: wrap;
+}
+
+.lancamentos-admin__tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.65rem 0.25rem;
+  margin-bottom: -1px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.lancamentos-admin__tab:hover { color: var(--text-primary); }
+
+.lancamentos-admin__tab.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.lancamentos-admin__tab-content { display: none; }
+.lancamentos-admin__tab-content.active { display: block; }
+
+/* ══════════════════════════════════════════════════════════════
    DRE — DEMONSTRAÇÃO DO RESULTADO
    ══════════════════════════════════════════════════════════════ */
 
@@ -1124,6 +1176,135 @@
   font-size: 0.72rem;
   color: var(--text-muted);
   margin-right: 0.35rem;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   IMPORTAÇÃO DE EXTRATO (portado do painel do cliente, mesmas
+   classes/ids — ver importacao-extrato.js reaproveitado sem
+   alteração pelo modal "Lançamentos para Cliente")
+   ══════════════════════════════════════════════════════════════ */
+
+.import-status {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(0, 245, 160, 0.08);
+  border: 1px solid rgba(0, 245, 160, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.import-status.import-status--error {
+  background: rgba(255, 77, 109, 0.08);
+  border-color: rgba(255, 77, 109, 0.3);
+  color: #ff8f8f;
+}
+
+.import-review { margin-top: 1.1rem; }
+
+.import-review__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.import-review__header h4 { color: var(--text-primary); font-size: 0.92rem; }
+
+.import-review__select-all {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.import-review__select-all input { width: auto; }
+
+.import-review__table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.import-review__table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.import-review__table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.import-review__table tbody td {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border-default);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.import-review__table tbody tr:last-child td { border-bottom: none; }
+.import-review__table tbody tr.import-row--duplicada { opacity: 0.55; }
+
+.import-review__table input[type="text"],
+.import-review__table input[type="number"],
+.import-review__table input[type="date"],
+.import-review__table select {
+  padding: 0.4rem 0.55rem;
+  font-size: 0.75rem;
+  min-width: 105px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+}
+
+.import-review__table input[type="checkbox"] { width: auto; margin: 0; }
+.import-review__table .import-descricao-input { min-width: 150px; }
+
+.import-review__origem-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.import-review__origem-badge--aprendida  { background: rgba(0, 245, 160, 0.14); color: var(--accent-primary); }
+.import-review__origem-badge--local      { background: rgba(66, 99, 235, 0.14); color: #7b96ff; }
+.import-review__origem-badge--manual     { background: rgba(255, 180, 67, 0.14); color: var(--accent-warning); }
+.import-review__origem-badge--duplicada  { background: rgba(107, 158, 132, 0.14); color: var(--text-muted); }
+
+.import-review__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1418,6 +1599,8 @@
   .charts-row  { grid-template-columns: 1fr; }
   .cards-grid  { grid-template-columns: 1fr; }
   .plano-contas-secao__grid { grid-template-columns: 1fr; }
+
+  .form-row-admin { grid-template-columns: 1fr; }
 
   .planejamento-card {
     flex-direction: column;

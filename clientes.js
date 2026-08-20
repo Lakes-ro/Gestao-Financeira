@@ -1,3 +1,18 @@
+/**
+ * CLIENTES.JS — Módulo: Clientes (admin.html)
+ * Padrão: script global. Sem import/export.
+ * Depende de: supabaseClient, currentAdmin, allClientes,
+ *             loadAllClientes, openModal, closeModal, showToast
+ *             (admin.js).
+ *
+ * ATUALIZAÇÃO — BOTÃO "📥 Lançamentos" EM CADA CARD:
+ * Abre o modal "Lançamentos para Cliente" (ver admin.html +
+ * lancamentos-admin.js) já com ESTE cliente pré-selecionado — dali o
+ * admin pode lançar uma transação manualmente ou importar um extrato
+ * (OFX/CSV) que o cliente mandou, reaproveitando toda a inteligência
+ * de classificação automática já usada no painel do próprio cliente.
+ */
+
 let clienteEmEdicao     = null;
 let clienteComentarioId = null;
 
@@ -56,6 +71,9 @@ async function renderClientes() {
         <button class="btn-card comentarios" data-id="${c.id}" data-nome="${c.nome}">💬 Comentários</button>
       </div>
       <div class="card-actions">
+        <button class="btn-card lancamentos" data-id="${c.id}">📥 Lançamentos</button>
+      </div>
+      <div class="card-actions">
         <button class="btn-card deletar" data-id="${c.id}" data-nome="${c.nome}">🗑️ Deletar</button>
       </div>
     </div>
@@ -71,6 +89,17 @@ async function renderClientes() {
   grid.querySelectorAll('.btn-card.comentarios').forEach(btn => {
     btn.addEventListener('click', () => {
       abrirModalComentarios(btn.dataset.id, btn.dataset.nome);
+    });
+  });
+
+  grid.querySelectorAll('.btn-card.lancamentos').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (typeof abrirModalLancamentosAdmin === 'function') {
+        abrirModalLancamentosAdmin(btn.dataset.id);
+      } else {
+        showToast('Módulo de lançamentos não carregou — recarregue a página.', 'error');
+        console.warn('⚠️ abrirModalLancamentosAdmin não está definida (lancamentos-admin.js carregado?).');
+      }
     });
   });
 
@@ -105,14 +134,10 @@ async function salvarCliente() {
 
   if (!nome) { showToast('Informe o nome do cliente.', 'error'); return; }
 
-  // ATUALIZAÇÃO — EMAIL OBRIGATÓRIO + AVISO DE DUPLICIDADE: o mesmo
-  // cliente já apareceu 3 VEZES na lista (cadastrado manualmente duas
-  // vezes, e uma terceira quando ele criou a própria conta). O email é
-  // a única forma confiável do sistema reconhecer "essa é a mesma
-  // pessoa" quando ela se registra depois — sem ele, a fusão automática
-  // (ver reconciliar_cliente_no_registro no banco) não tem como
-  // funcionar. Por isso agora é obrigatório, e avisamos ANTES de
-  // salvar se já existe alguém com esse email.
+  // EMAIL OBRIGATÓRIO + AVISO DE DUPLICIDADE: o email é a única forma
+  // confiável do sistema reconhecer "essa é a mesma pessoa" quando ela
+  // se registra depois — sem ele, a fusão automática (ver
+  // reconciliar_cliente_no_registro no banco) não tem como funcionar.
   if (!email) {
     showToast('Informe o email do cliente — sem ele, se a pessoa criar a própria conta depois, vai virar um cadastro duplicado.', 'error');
     return;
@@ -224,4 +249,4 @@ function formatDataComentario(dateStr) {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-console.log('✅ clientes.js carregado');
+console.log('✅ clientes.js carregado (com botão de Lançamentos)');

@@ -12,28 +12,28 @@
  *
  * ATENÇÃO: o módulo ClientModule (estado do cliente logado,
  * addTransaction, addGoal) NÃO está definido aqui — vive em
- * client.js. Se este ficheiro for incluído num HTML sem
- * <script src="client.js"> carregado antes, todas as chamadas a
- * ClientModule abaixo vão falhar com "ClientModule is not defined".
+ * client.js.
  *
  * ATUALIZAÇÃO — SMART DATE + SMART INPUT (smart-input.js):
  * 1) switchClientView() chama initForm() sempre que a aba
- *    "Transações" é aberta — isso garante que a data de hoje já
- *    esteja preenchida (Smart Date) assim que o cliente vê o
- *    formulário, sem sobrescrever uma data que ele já tenha alterado
- *    manualmente antes de submeter.
- * 2) handleAddTransaction() agora, antes de validar a categoria,
- *    garante que qualquer classificação automática em andamento
- *    (disparada pelo onblur do campo Descrição) termine primeiro — e,
- *    se o cliente clicar em Registar sem nunca ter saído do campo
- *    Descrição, tenta classificar de última hora. Depois de um
- *    registo bem-sucedido, chama initForm(true) para reinjetar a data
- *    de hoje no formulário já resetado, pronto para o próximo
- *    lançamento.
- * Todas as chamadas a funções de smart-input.js são protegidas por
- * `typeof === 'function'`, então o fluxo antigo (100% manual)
- * continua funcionando normalmente mesmo que smart-input.js não
- * esteja carregado na página.
+ *    "Transações" é aberta.
+ * 2) handleAddTransaction() garante que qualquer classificação
+ *    automática em andamento termine antes de validar.
+ *
+ * ATUALIZAÇÃO — DASHBOARD FILTRÁVEL POR PERÍODO:
+ * O "Resumo do Mês"/"Análise Financeira" agora tem uma barra de
+ * filtro de período (igual à do Histórico: Todos/Hoje/7 dias/Este
+ * mês/Personalizado — ver client.html/index.html, bloco
+ * `#dashboardFilters`). getFiltroDashboardAtual() lê esses controles
+ * e initDashboardFilters() liga os listeners; trocar o período
+ * re-renderiza SÓ o dashboard (não recarrega metas/histórico/
+ * planejamento inteiros, para ficar rápido).
+ *
+ * ATUALIZAÇÃO — HISTÓRICO RECOLHÍVEL:
+ * O card "📋 Histórico" agora pode ser fechado/aberto via
+ * toggleHistoricoCard() (botão-cabeçalho, reaproveitando as classes
+ * genéricas .btn-collapse/.collapse-icon/.collapse-content que já
+ * existiam em style.css sem uso).
  */
 
 // ================================================
@@ -52,6 +52,21 @@ function toggleAddMetaForm() {
     document.getElementById('addMetaForm')?.classList.toggle('hidden');
 }
 
+/**
+ * Abre/fecha o corpo do card "Histórico" (filtros + lista de
+ * transações). O ícone (▾/▸) gira via CSS (.collapse-icon já suporta
+ * rotação, ver style.css) — aqui só alternamos uma classe no ícone
+ * para indicar estado recolhido, e a classe .hidden no conteúdo.
+ */
+function toggleHistoricoCard() {
+    const conteudo = document.getElementById('historicoConteudo');
+    const icone    = document.getElementById('historicoCollapseIcon');
+    if (!conteudo) return;
+
+    const estaEscondido = conteudo.classList.toggle('hidden');
+    if (icone) icone.textContent = estaEscondido ? '▸' : '▾';
+}
+
 function switchClientView(sectionId, event) {
     event.preventDefault();
     document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
@@ -62,9 +77,6 @@ function switchClientView(sectionId, event) {
     if (sectionId === 'cli-transactions') {
         garantirCategoriasCarregadas();
 
-        // Smart Date: garante que o campo de data já tenha a data de
-        // hoje pronta assim que o cliente abre a aba de Transações
-        // (não sobrescreve se ele já tiver alterado manualmente).
         if (typeof initForm === 'function') {
             initForm(false);
         }
@@ -76,34 +88,19 @@ function switchClientView(sectionId, event) {
 // ================================================
 
 async function routeByRole(user, role) {
-    // ── ADMIN: painel próprio, fora deste ficheiro ──
     if (role === 'admin') {
         window.location.href = 'admin.html';
         return;
     }
 
-    // ── VERIFICA ONBOARDING ──
     const needsOnboarding = await checkOnboarding(user, role);
     if (needsOnboarding) {
         UIModule.showScreen('onboardingScreen');
         return;
     }
 
-    // ── AUTOCURA: garante que a linha em `clientes` existe ──
-    // BUG JÁ CORRIGIDO (confirmado em produção via console: erro 403 ao
-    // registar transação/meta): checkOnboarding() só verifica se
-    // `usuarios.nome_completo`/`apelido` estão preenchidos — mas a linha
-    // em `clientes` (necessária para RLS de transacoes/metas) só era
-    // criada dentro de handleRegister/handleOnboarding. Contas que
-    // completaram o cadastro ANTES desta correção existir ficaram com
-    // `usuarios` completo mas SEM linha em `clientes`, então caíam
-    // direto no dashboard (sem nunca passar pelo onboarding de novo) e
-    // qualquer INSERT em transacoes/metas era bloqueado pela RLS.
-    // garantirClienteExiste() repara isso automaticamente, sem exigir
-    // que o cliente refaça o onboarding.
     await garantirClienteExiste(user);
 
-    // ── FLUXO CLIENTE ──
     try {
         const { data: usuario } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
@@ -121,24 +118,6 @@ async function routeByRole(user, role) {
     await loadClientDashboard();
 }
 
-/**
- * Garante que existe uma linha em `clientes` com id = user.id — sem essa
- * linha, a RLS de transacoes/metas/planejamentos bloqueia qualquer
- * operação do cliente (elas dependem de EXISTS/comparação contra
- * clientes.id). Idempotente: se a linha já existir, não faz nada.
- * Chamada em todo login (routeByRole), não só no cadastro/onboarding —
- * é isso que torna a correção autocurativa para contas já existentes.
- *
- * ATUALIZAÇÃO — RECONCILIAÇÃO DE DUPLICATAS: em vez de um INSERT
- * direto, chama a função reconciliar_cliente_no_registro() (RPC no
- * Supabase). Ela faz o INSERT da mesma forma, mas ANTES procura se já
- * existe uma ficha "placeholder" com o mesmo email (criada manualmente
- * pelo admin antes do cliente se registrar) — se achar, transfere
- * qualquer transação/meta/planejamento já lançado nela para o id
- * definitivo e apaga a ficha antiga, evitando o bug de "cliente
- * duplicado" (confirmado em produção: o mesmo cliente chegou a
- * aparecer 3 vezes em Meus Clientes).
- */
 async function garantirClienteExiste(user) {
     try {
         const { data: jaExiste, error: selectError } = await supabaseClient
@@ -148,10 +127,8 @@ async function garantirClienteExiste(user) {
             .maybeSingle();
 
         if (selectError) throw selectError;
-        if (jaExiste) return; // já existe — nada a fazer
+        if (jaExiste) return;
 
-        // Busca nome/apelido já preenchidos em `usuarios` para não pedir
-        // esses dados de novo — o cliente já os informou no cadastro.
         const { data: usuario } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
             .select('nome_completo, apelido')
@@ -169,11 +146,6 @@ async function garantirClienteExiste(user) {
 
         console.log('✅ garantirClienteExiste: linha em clientes criada/reconciliada retroativamente para', user.email);
     } catch (error) {
-        // Não bloqueia o login se isso falhar — só regista o problema.
-        // Se a causa for RLS (client_insert_self exige auth.uid() = id,
-        // o que já é o caso aqui), o próximo passo é investigar a policy;
-        // se for outra coisa, o cliente ainda consegue ver o dashboard,
-        // só não conseguirá lançar transações até isto ser resolvido.
         console.error('❌ garantirClienteExiste: falha ao verificar/criar linha em clientes:', error.message);
     }
 }
@@ -258,10 +230,8 @@ async function handleRegister(event) {
     if (btn) { btn.disabled = true; btn.textContent = 'Criando conta...'; }
 
     try {
-        // 1. Cria no Supabase Auth
         const user = await AuthModule.register(email, password);
 
-        // 2. Insere em usuarios
         await supabaseClient.from(CONFIG.TABLES.USUARIOS).insert([{
             id:            user.id,
             nome_completo: nome,
@@ -269,18 +239,12 @@ async function handleRegister(event) {
             created_at:    new Date().toISOString()
         }]);
 
-        // 3. Insere em usuarios_perfis com role 'client'
         await supabaseClient.from(CONFIG.TABLES.USUARIOS_PERFIS).insert([{
             usuario_id: user.id,
             perfil:     'client',
             created_at: new Date().toISOString()
         }]);
 
-        // 4. Cria/reconcilia a linha em `clientes` — a função RPC funde
-        //    automaticamente com qualquer ficha "placeholder" que o
-        //    admin já tenha criado manualmente com o mesmo email,
-        //    evitando cliente duplicado (ver garantirClienteExiste
-        //    para a explicação completa).
         await supabaseClient.rpc('reconciliar_cliente_no_registro', {
             p_nome:  nome,
             p_email: email
@@ -334,7 +298,6 @@ async function handleOnboarding(event) {
     if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
 
     try {
-        // 1. Upsert em usuarios
         const { error: usuarioError } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
             .upsert({
@@ -345,7 +308,6 @@ async function handleOnboarding(event) {
             });
         if (usuarioError) throw usuarioError;
 
-        // 2. Garante registo em usuarios_perfis
         const { data: jaTemPerfil, error: selectError } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS_PERFIS)
             .select('id')
@@ -364,10 +326,6 @@ async function handleOnboarding(event) {
             if (insertError) throw insertError;
         }
 
-        // 3. Garante/reconcilia registo na tabela clientes — a função RPC
-        //    funde automaticamente com qualquer ficha "placeholder" que
-        //    o admin já tenha criado manualmente com o mesmo email (ver
-        //    garantirClienteExiste para a explicação completa).
         const { data: jaExisteCliente } = await supabaseClient
             .from(CONFIG.TABLES.CLIENTES)
             .select('id')
@@ -384,7 +342,6 @@ async function handleOnboarding(event) {
 
         UIModule.showSuccess(`Bem-vindo, ${apelido}! 🎉`);
 
-        // 4. Segue para o painel do cliente
         ClientModule.setClientId(user.id);
         UIModule.setText('clientNameDisplay', apelido);
         await populateCategorySelect();
@@ -430,7 +387,7 @@ async function loadClientDashboard() {
             UIModule.setText('clientNameDisplay', user?.email?.split('@')[0] || 'Cliente');
         }
 
-        await DashboardModule.renderClientDashboard(clientId);
+        await DashboardModule.renderClientDashboard(clientId, getFiltroDashboardAtual());
 
         const goals = await GoalsModule.loadClientGoals(clientId);
         GoalsModule.renderGoals('clientMetasList', goals);
@@ -444,14 +401,74 @@ async function loadClientDashboard() {
     }
 }
 
+// ── FILTRO DE PERÍODO DO DASHBOARD ──────────────────────────────
+// Espelha getFiltroHistoricoAtual() (abaixo), mas lendo os controles
+// #dashPeriodoRapido/#dashDataInicio/#dashDataFim. Trocar o período
+// re-renderiza SÓ o dashboard (rápido), sem tocar em metas/histórico/
+// planejamento.
+function getFiltroDashboardAtual() {
+    const filtro  = {};
+    const periodo = document.getElementById('dashPeriodoRapido')?.value || 'todos';
+
+    const hojeStr = typeof getDataDeHojeFormatoInput === 'function'
+        ? getDataDeHojeFormatoInput()
+        : formatarDataLocal(new Date());
+
+    if (periodo === 'hoje') {
+        filtro.dataInicio = hojeStr;
+        filtro.dataFim    = hojeStr;
+    } else if (periodo === '7dias') {
+        const seteDiasAtras = new Date();
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 6);
+        filtro.dataInicio = formatarDataLocal(seteDiasAtras);
+        filtro.dataFim    = hojeStr;
+    } else if (periodo === 'mes') {
+        const agora       = new Date();
+        const primeiroDia = new Date(agora.getFullYear(), agora.getMonth(), 1);
+        filtro.dataInicio = formatarDataLocal(primeiroDia);
+        filtro.dataFim    = hojeStr;
+    } else if (periodo === 'mes_passado') {
+        const agora                = new Date();
+        const primeiroDiaMesPassado = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+        const ultimoDiaMesPassado   = new Date(agora.getFullYear(), agora.getMonth(), 0);
+        filtro.dataInicio = formatarDataLocal(primeiroDiaMesPassado);
+        filtro.dataFim    = formatarDataLocal(ultimoDiaMesPassado);
+    } else if (periodo === 'personalizado') {
+        const inicio = document.getElementById('dashDataInicio')?.value;
+        const fim    = document.getElementById('dashDataFim')?.value;
+        if (inicio) filtro.dataInicio = inicio;
+        if (fim)    filtro.dataFim    = fim;
+    }
+    // periodo === 'todos' -> sem filtro nenhum
+
+    return filtro;
+}
+
+async function atualizarDashboardComFiltro() {
+    const clientId = ClientModule.getClientId();
+    if (!clientId) return;
+    await DashboardModule.renderClientDashboard(clientId, getFiltroDashboardAtual());
+}
+
+function initDashboardFilters() {
+    const selectPeriodo      = document.getElementById('dashPeriodoRapido');
+    const linhaPersonalizada = document.getElementById('dashPeriodoPersonalizadoRow');
+    const inputInicio        = document.getElementById('dashDataInicio');
+    const inputFim           = document.getElementById('dashDataFim');
+
+    if (!selectPeriodo) return; // elemento não existe nesta página — não faz nada
+
+    selectPeriodo.addEventListener('change', () => {
+        const personalizado = selectPeriodo.value === 'personalizado';
+        linhaPersonalizada?.classList.toggle('hidden', !personalizado);
+        atualizarDashboardComFiltro();
+    });
+
+    inputInicio?.addEventListener('change', atualizarDashboardComFiltro);
+    inputFim?.addEventListener('change', atualizarDashboardComFiltro);
+}
+
 // ── HISTÓRICO DE TRANSAÇÕES: cache local + filtros por período ──
-// ATUALIZAÇÃO — HISTÓRICO FILTRÁVEL: `clienteTransacoesCache` guarda a
-// última lista carregada do banco. Trocar de filtro (período rápido,
-// intervalo personalizado, tipo) NÃO refaz a consulta ao Supabase —
-// só reaplica o filtro em cima do que já está em memória, via
-// TransactionsModule.renderTransactions(). Isso é recarregado (refetch
-// de verdade) sempre que uma transação é adicionada/editada/excluída
-// com sucesso, via loadClientDashboard() -> loadClientTransactions().
 let clienteTransacoesCache = [];
 
 async function loadClientTransactions() {
@@ -464,13 +481,6 @@ async function loadClientTransactions() {
     }
 }
 
-/**
- * Lê o estado atual dos controles de filtro do histórico e monta o
- * objeto de filtro que TransactionsModule.renderTransactions() espera
- * ({ type, dataInicio, dataFim }). Centralizado aqui para que tanto o
- * carregamento inicial quanto qualquer mudança nos controles cheguem
- * ao mesmo resultado.
- */
 function getFiltroHistoricoAtual() {
     const filtro  = {};
     const tipo    = document.getElementById('histFiltroTipo')?.value || '';
@@ -478,10 +488,6 @@ function getFiltroHistoricoAtual() {
 
     if (tipo) filtro.type = tipo;
 
-    // getDataDeHojeFormatoInput vem de smart-input.js (Smart Date) —
-    // reaproveitado aqui para manter uma ÚNICA forma de calcular "hoje"
-    // em fuso local no projeto inteiro, evitando o mesmo bug de UTC que
-    // já foi corrigido lá (toISOString() "voltando" um dia).
     const hojeStr = typeof getDataDeHojeFormatoInput === 'function'
         ? getDataDeHojeFormatoInput()
         : formatarDataLocal(new Date());
@@ -491,7 +497,7 @@ function getFiltroHistoricoAtual() {
         filtro.dataFim    = hojeStr;
     } else if (periodo === '7dias') {
         const seteDiasAtras = new Date();
-        seteDiasAtras.setDate(seteDiasAtras.getDate() - 6); // inclui hoje = 7 dias no total
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 6);
         filtro.dataInicio = formatarDataLocal(seteDiasAtras);
         filtro.dataFim    = hojeStr;
     } else if (periodo === 'mes') {
@@ -499,20 +505,22 @@ function getFiltroHistoricoAtual() {
         const primeiroDia = new Date(agora.getFullYear(), agora.getMonth(), 1);
         filtro.dataInicio = formatarDataLocal(primeiroDia);
         filtro.dataFim    = hojeStr;
+    } else if (periodo === 'mes_passado') {
+        const agora                = new Date();
+        const primeiroDiaMesPassado = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+        const ultimoDiaMesPassado   = new Date(agora.getFullYear(), agora.getMonth(), 0);
+        filtro.dataInicio = formatarDataLocal(primeiroDiaMesPassado);
+        filtro.dataFim    = formatarDataLocal(ultimoDiaMesPassado);
     } else if (periodo === 'personalizado') {
         const inicio = document.getElementById('histDataInicio')?.value;
         const fim    = document.getElementById('histDataFim')?.value;
         if (inicio) filtro.dataInicio = inicio;
         if (fim)    filtro.dataFim    = fim;
     }
-    // periodo === 'todos' -> sem filtro de data nenhum
 
     return filtro;
 }
 
-// Mesma lógica de formatação local de getDataDeHojeFormatoInput (smart-
-// input.js), mas aceitando qualquer data (não só "agora") — usada para
-// calcular os limites de "últimos 7 dias" e "este mês".
 function formatarDataLocal(d) {
     const ano = d.getFullYear();
     const mes = String(d.getMonth() + 1).padStart(2, '0');
@@ -525,13 +533,6 @@ function renderClientTransactionHistory() {
     TransactionsModule.renderTransactions('transactionHistoryList', filtro, clienteTransacoesCache);
 }
 
-/**
- * Liga os controles de filtro do histórico (período rápido, datas
- * personalizadas, tipo). Chamada uma vez em initializeApp(). Mostra/
- * esconde a linha de datas personalizadas conforme o período rápido
- * escolhido, e sempre reaplica o filtro (client-side, sem refetch)
- * a cada mudança.
- */
 function initHistoryFilters() {
     const selectPeriodo      = document.getElementById('histPeriodoRapido');
     const linhaPersonalizada = document.getElementById('histPeriodoPersonalizadoRow');
@@ -539,7 +540,7 @@ function initHistoryFilters() {
     const inputFim           = document.getElementById('histDataFim');
     const selectTipo         = document.getElementById('histFiltroTipo');
 
-    if (!selectPeriodo) return; // elementos não existem nesta página — não faz nada
+    if (!selectPeriodo) return;
 
     selectPeriodo.addEventListener('change', () => {
         const personalizado = selectPeriodo.value === 'personalizado';
@@ -581,12 +582,6 @@ async function loadClientPlanning() {
 // ================================================
 // SOLICITAÇÃO DE PLANEJAMENTO (CLIENTE)
 // ================================================
-// Antes não existia NENHUMA forma do cliente avisar o admin que queria
-// um planejamento — a aba só mostrava uma mensagem passiva de espera.
-// Agora, se não houver planejamento nenhum ainda, aparece um botão
-// "Solicitar Planejamento"; se já houver uma solicitação pendente,
-// mostra isso em vez do botão (evita pedir duas vezes). O admin vê e
-// atende essas solicitações em admin.html (ver planejamentos.js).
 
 async function atualizarAreaSolicitacaoPlanejamento(clientId) {
     const area = document.getElementById('clientPlanningRequestArea');
@@ -658,29 +653,9 @@ async function handleEnviarSolicitacaoPlanejamento() {
 // ================================================
 // EDIÇÃO E EXCLUSÃO DE TRANSAÇÕES
 // ================================================
-// ATUALIZAÇÃO — o cliente agora pode editar (categoria, valor, data,
-// descrição) ou excluir qualquer transação já lançada, direto pelo
-// histórico (botões ✏️/🗑️ em cada item, ligados por
-// ligarBotoesDeAcaoDaTransacao em transactions.js). Casos reais que
-// isso resolve: categoria errada, valor digitado errado, ou uma
-// despesa que precisa ser removida porque o pagamento foi estornado.
-//
-// NOTA DE DESIGN: editar uma transação NÃO atualiza a regra aprendida
-// (regras_aprendidas) para aquela descrição — é uma correção pontual
-// daquele lançamento específico, não necessariamente um sinal de que
-// a classificação automática está errada para todo mundo que usar o
-// mesmo termo no futuro. Quem quiser corrigir a regra aprendida em si
-// deve editar/relançar via o formulário normal (que já aprende a cada
-// "Registar" bem-sucedido).
 
 let transacaoEmEdicaoId = null;
 
-/**
- * Abre o modal de edição já preenchido com os dados da transação
- * (buscada do cache local `clienteTransacoesCache`, sem round-trip ao
- * banco). Popula o dropdown de categoria do modal com a categoria
- * atual já selecionada.
- */
 async function abrirModalEditarTransacao(transactionId) {
     const transacao = clienteTransacoesCache.find(t => t.id === transactionId);
     if (!transacao) {
@@ -697,12 +672,6 @@ async function abrirModalEditarTransacao(transactionId) {
 
     await popularCategoriaEdicao(transacao.categoria_id);
 
-    // Pré-seleciona a meta já vinculada a esta transação (se houver —
-    // `transacao.meta_id` vem direto do `select('*')` de
-    // getTransactionsByClient). O valor precisa ser setado ANTES de
-    // chamar atualizarSeletorDeMeta: ela lê select.value logo no início
-    // (antes de qualquer await) para preservar a seleção ao reconstruir
-    // as opções — ver comentário na própria função.
     const seletorMeta = document.getElementById('editTransMeta');
     if (seletorMeta) seletorMeta.value = transacao.meta_id || '';
     await atualizarSeletorDeMeta('editTransCategory', 'editTransMetaWrapper', 'editTransMeta');
@@ -710,12 +679,6 @@ async function abrirModalEditarTransacao(transactionId) {
     UIModule.openModal('editTransactionModal');
 }
 
-/**
- * Carrega as categorias reais e monta o painel do dropdown de
- * categoria DENTRO do modal de edição — reaproveita montarPainelAgrupado
- * (mesma função usada no formulário principal de "Registar Transação"),
- * só que aplicada aos ids do modal de edição (editTransCategory*).
- */
 async function popularCategoriaEdicao(categoriaSelecionadaId) {
     const trigger     = document.getElementById('editTransCategoryTrigger');
     const triggerText = document.getElementById('editTransCategoryTriggerText');
@@ -747,10 +710,6 @@ async function popularCategoriaEdicao(categoriaSelecionadaId) {
     }
 }
 
-// Liga os cliques nas opções do painel de categoria DO MODAL DE
-// EDIÇÃO — espelha ligarCliquesDoPainel() (formulário principal), mas
-// aponta para os ids editTransCategory*, para não conflitar com o
-// dropdown do formulário de "Registar Transação".
 function ligarCliquesDoPainelEdicao() {
     const panel = document.getElementById('editTransCategoryPanel');
     if (!panel) return;
@@ -784,9 +743,6 @@ function fecharPainelEdicaoCategorias() {
     document.getElementById('editTransCategoryTrigger')?.classList.remove('open');
 }
 
-// Liga o botão/trigger do dropdown de categoria do modal de edição —
-// chamado uma vez em initializeApp() (o modal já existe no HTML desde
-// o carregamento da página, só fica escondido via .hidden).
 function initEditCategoryDropdown() {
     const trigger = document.getElementById('editTransCategoryTrigger');
     const wrapper = document.getElementById('editTransCategoryWrapper');
@@ -826,13 +782,6 @@ async function handleSalvarEdicaoTransacao() {
         const cat        = categorias.find(c => c.id === categoriaId);
         if (!cat) throw new Error('Categoria inválida');
 
-        // meta_id precisa ser enviado SEMPRE (mesmo null) — se
-        // omitíssemos este campo quando a categoria deixa de ser
-        // 'investimento', o UPDATE parcial do Supabase não tocaria a
-        // coluna, o vínculo antigo ficaria orfão para sempre, e o
-        // trigger de sincronização não veria NENHUMA mudança em
-        // meta_id (OLD e NEW ficariam iguais) — logo, o valor
-        // continuaria contando na meta antiga por engano.
         await ClientModule.updateTransaction(id, {
             categoria_id:     categoriaId,
             valor,
@@ -852,26 +801,17 @@ async function handleSalvarEdicaoTransacao() {
     }
 }
 
-// Fecha o modal de edição E o painel de categoria (se estiver aberto)
-// juntos. Necessário porque, com a correção de posicionamento
-// flutuante, o painel pode ter sido reparentado para <body> — se
-// fechássemos só o modal, o painel ficaria "flutuando" solto na tela,
-// visualmente desconectado do formulário que já sumiu.
 function fecharModalEdicaoTransacao() {
     fecharPainelEdicaoCategorias();
     UIModule.closeModal('editTransactionModal');
 }
 
-// Excluir a partir de DENTRO do modal de edição (usa o id já
-// carregado em #editTransId).
 async function handleDeletarTransacao() {
     const id = document.getElementById('editTransId').value;
     if (!id) return;
     await excluirTransacaoComConfirmacao(id, fecharModalEdicaoTransacao);
 }
 
-// Excluir direto do botão 🗑️ no item do histórico, sem abrir o modal
-// (ligado por transactions.js/ligarBotoesDeAcaoDaTransacao).
 async function handleDeletarTransacaoRapido(transactionId) {
     await excluirTransacaoComConfirmacao(transactionId);
 }
@@ -890,28 +830,14 @@ async function excluirTransacaoComConfirmacao(transactionId, aoConcluir) {
 }
 
 // ── ADICIONAR TRANSAÇÃO (CLIENTE) ──
-// ATUALIZAÇÃO — SMART INPUT / SMART DATE: antes de validar/salvar,
-// garante que uma classificação automática (disparada pelo onblur da
-// descrição, ver smart-input.js) já tenha terminado. Se o campo de
-// categoria ainda estiver vazio nesse ponto (ex: cliente nunca saiu do
-// campo Descrição antes de clicar em Registar), tenta classificar de
-// última hora. Depois de registar com sucesso, reinjeta a data de hoje
-// no formulário já resetado (initForm(true)), deixando-o pronto para o
-// próximo lançamento. As chamadas são protegidas por
-// `typeof === 'function'` para que o formulário continue funcionando
-// normalmente (100% manual) mesmo que smart-input.js não esteja
-// carregado na página.
 
 async function handleAddTransaction(event) {
     event.preventDefault();
 
-    // Smart Input: espera classificação em andamento, se houver
     if (typeof aguardarClassificacaoSmartInputPendente === 'function') {
         await aguardarClassificacaoSmartInputPendente();
     }
 
-    // Smart Input: se a categoria ainda não foi preenchida, tenta
-    // classificar a descrição já digitada antes de bloquear o envio
     if (!document.getElementById('transCategory').value &&
         typeof autoClassify === 'function') {
         const descricaoAtual = document.getElementById('transDescription').value.trim();
@@ -923,10 +849,6 @@ async function handleAddTransaction(event) {
     const valor       = parseFloat(document.getElementById('transValue').value);
     const data        = document.getElementById('transDate').value;
     const descricao   = document.getElementById('transDescription').value;
-    // Vínculo opcional com uma Meta/Caixinha — só existe/aparece
-    // quando a categoria escolhida é do grupo 'investimento' (ver
-    // atualizarSeletorDeMeta). Se o campo não existir na página ou
-    // estiver vazio, metaId fica null — transação comum, sem alocação.
     const metaId      = document.getElementById('transMeta')?.value || null;
 
     if (!categoriaId) { UIModule.showError('Seleciona uma categoria'); return; }
@@ -947,14 +869,6 @@ async function handleAddTransaction(event) {
             meta_id: cat.grupo === 'investimento' ? (metaId || null) : null
         });
 
-        // Aprendizado de Categorias (regras-aprendidas.js): grava (ou
-        // corrige, se já existia) a regra termo→categoria para este
-        // cliente, usando a categoria FINAL confirmada no Registar —
-        // seja ela a sugestão aceita como estava, seja uma correção
-        // manual feita pelo cliente antes de salvar. Roda depois do
-        // addTransaction ter tido sucesso, e é isolado num try/catch
-        // próprio: uma falha ao salvar a REGRA nunca deve fazer parecer
-        // que a TRANSAÇÃO em si falhou (ela já foi salva na linha acima).
         if (typeof RegrasAprendidasModule !== 'undefined' && descricao.trim()) {
             try {
                 await RegrasAprendidasModule.salvarOuAtualizarRegra({
@@ -970,26 +884,12 @@ async function handleAddTransaction(event) {
 
         event.target.reset();
 
-        // Smart Date: o reset() acima limpa o campo de data também —
-        // reinjeta a data de hoje (forçado, já que o campo ficou vazio)
-        // para o próximo lançamento já vir pronto.
         if (typeof initForm === 'function') {
             initForm(true);
         }
 
-        // O reset() limpa a categoria também — esconde o seletor de
-        // meta (só reaparece quando uma categoria de investimento for
-        // escolhida de novo no próximo lançamento).
         atualizarSeletorDeMeta('transCategory', 'transMetaWrapper', 'transMeta');
 
-        // LOOP DE LANÇAMENTO RÁPIDO: depois de registar (seja clicando
-        // no botão, seja apertando Enter no campo Valor — Enter dentro
-        // de um <form> já dispara o submit por padrão do navegador),
-        // o foco volta sozinho para a Descrição. Isso permite lançar
-        // várias transações seguidas só pelo teclado: digita a
-        // descrição, Tab/clica a categoria sugerida, digita o valor,
-        // Enter — e já está pronto pra digitar a próxima descrição,
-        // sem precisar tocar no mouse a cada lançamento.
         document.getElementById('transDescription')?.focus();
 
         UIModule.showSuccess('Transação registada!');
@@ -1002,32 +902,7 @@ async function handleAddTransaction(event) {
 // ================================================
 // VÍNCULO OPCIONAL: TRANSAÇÃO → META/CAIXINHA
 // ================================================
-// Quando a categoria escolhida (no formulário principal OU no modal de
-// edição) é do grupo 'investimento' (Aporte em Investimentos,
-// Previdência Privada, Reserva de Emergência), aparece um seletor
-// extra e OPCIONAL: "Vincular a uma Meta". Se o cliente escolher uma,
-// o valor da transação passa a contar automaticamente no progresso
-// daquela meta (barra de progresso em "Minhas Metas").
-//
-// IMPORTANTE: a sincronização em si (somar/subtrair do
-// metas.valor_economizado) acontece via TRIGGER no banco
-// (trg_sync_valor_economizado_meta — ver migração), não aqui. Esta
-// função só cuida da UI: mostrar/esconder o campo certo e popular as
-// opções com as metas reais do cliente. Isso garante que o progresso
-// da meta fique correto não importa por qual caminho a transação foi
-// criada (formulário manual, edição, OU a importação em massa de
-// OFX/CSV) — o trigger cobre todos, sem precisar duplicar esta lógica
-// em cada lugar.
-//
-// Chamada depois de QUALQUER caminho que preencha a categoria: clique
-// manual (ligarCliquesDoPainel/ligarCliquesDoPainelEdicao), Smart
-// Input (smart-input.js) e Aprendizado de Categorias
-// (regras-aprendidas.js) — por isso recebe os ids como parâmetro, em
-// vez de estar hard-coded para um só formulário.
-//
-// @param {string} idCategoriaHidden - id do <input type="hidden"> com o categoria_id atual
-// @param {string} idWrapper         - id do <div> que envolve o seletor (mostrado/escondido)
-// @param {string} idSelect          - id do <select> de metas
+
 async function atualizarSeletorDeMeta(idCategoriaHidden, idWrapper, idSelect) {
     const wrapper        = document.getElementById(idWrapper);
     const select          = document.getElementById(idSelect);
@@ -1041,9 +916,6 @@ async function atualizarSeletorDeMeta(idCategoriaHidden, idWrapper, idSelect) {
     }
 
     try {
-        // Reaproveita o cache de categorias do Smart Input quando
-        // disponível (evita refetch a cada seleção); cai para uma busca
-        // direta se smart-input.js não estiver carregado nesta página.
         const categorias = typeof getCategoriasParaClassificacao === 'function'
             ? await getCategoriasParaClassificacao()
             : await DatabaseModule.getCategorias();
@@ -1060,19 +932,11 @@ async function atualizarSeletorDeMeta(idCategoriaHidden, idWrapper, idSelect) {
         const metas    = await DatabaseModule.getMetasByClient(clientId);
 
         if (!metas.length) {
-            // Sem nenhuma meta cadastrada ainda — não faz sentido
-            // mostrar um seletor vazio; o cliente pode criar uma na aba
-            // "Metas" e o campo passa a aparecer no próximo lançamento.
             wrapper.classList.add('hidden');
             select.value = '';
             return;
         }
 
-        // Preserva a seleção atual do <select>, se ainda for válida —
-        // isto é o que permite ao modal de edição pré-selecionar a meta
-        // já vinculada: quem chama esta função pode setar select.value
-        // ANTES de chamá-la (ver abrirModalEditarTransacao), e esse
-        // valor sobrevive à reconstrução das opções abaixo.
         const valorSelecionadoAntes = select.value;
 
         select.innerHTML = '<option value="">Não vincular a nenhuma meta</option>' +
@@ -1129,26 +993,15 @@ async function waitForSupabase(maxAttempts = 20) {
 // ================================================
 // CATEGORIAS (plano de contas)
 // ================================================
-// ANTES: populateCategorySelect() só era chamada 1x no login. Se a
-// consulta voltasse vazia (0 linhas) ou desse erro (RLS, coluna,
-// rede), a função saía/entrava no catch em silêncio — o <select>
-// ficava travado no placeholder "Carregando categorias..." para
-// sempre, sem qualquer forma de recuperação sem recarregar a página.
-//
-// AGORA: o estado do carregamento fica visível (no próprio select) e
-// visível para o utilizador (toast), e há retentativa automática
-// sempre que a aba "Transações" é reaberta ou o campo recebe foco —
-// sem precisar recarregar a página.
 
 let categoriasEstado = 'idle'; // 'idle' | 'carregando' | 'ok' | 'vazio' | 'erro'
 
-// Rótulos amigáveis pra agrupar o select por `grupo` — o cliente não
-// precisa saber o que é "despesa"/"receita" tecnicamente, o sistema
-// já infere isso sozinho a partir da categoria escolhida.
 const GRUPO_LABEL_SELECT = {
     essencial:      '🟠 Essenciais',
     estilo_de_vida: '🎯 Estilo de Vida',
     investimento:   '💰 Investimentos',
+    divida:         '💳 Dívidas e Financiamentos',
+    transferencia:  '🔄 Transferências Internas',
     renda:          '📈 Renda'
 };
 
@@ -1178,20 +1031,21 @@ function setCategorySelectState(state, categorias = []) {
         panel.innerHTML = '';
         hiddenInput.value = '';
     } else if (state === 'erro') {
-        trigger.disabled = false; // habilitado para permitir tocar e tentar de novo
+        trigger.disabled = false;
         triggerText.textContent = '⚠️ Falha ao carregar — toque aqui para tentar de novo';
         panel.innerHTML = '';
         hiddenInput.value = '';
     }
 }
 
-// Agrupa as categorias por `grupo` (essencial/estilo_de_vida/
-// investimento/renda) em seções visuais dentro do painel próprio,
-// na ordem que faz mais sentido pro cliente ver primeiro suas
-// despesas do dia a dia. O campo `tipo` (receita/despesa) nunca
-// aparece no texto — é só metadado interno que o sistema usa
-// sozinho (ex: no dashboard, no saldo).
-const ORDEM_GRUPOS = ['essencial', 'estilo_de_vida', 'investimento', 'renda'];
+// Grupos de despesa primeiro (fluxo do dia a dia), renda por último —
+// dentro do dropdown do formulário. A convenção "Receita antes de
+// Despesa" pedida se aplica aos RESUMOS/LISTAS (Resumo do Mês,
+// Histórico, listas do admin); aqui o agrupamento por finalidade
+// (essencial/estilo de vida/... /renda) é intencionalmente mantido,
+// pois é assim que o cliente naturalmente busca uma categoria de
+// GASTO do dia a dia primeiro.
+const ORDEM_GRUPOS = ['essencial', 'estilo_de_vida', 'investimento', 'divida', 'transferencia', 'renda'];
 
 function montarPainelAgrupado(categorias) {
     const porGrupo = {};
@@ -1221,40 +1075,16 @@ function montarPainelAgrupado(categorias) {
     }).join('');
 }
 
-// ── POSICIONAMENTO FLUTUANTE DOS DROPDOWNS DE CATEGORIA ────────
-// CORREÇÃO: o painel de categoria (.custom-select__panel) é
-// `position: absolute` relativo ao seu `.custom-select` — isso
-// funciona bem quando o dropdown está solto na página, mas quebra
-// quando está DENTRO de um contêiner com `overflow` (ex: o modal de
-// edição de transação, cujo `.modal__content` tem `overflow-y:auto` e
-// `max-height:90vh`): o painel fica CORTADO pela borda do contêiner,
-// escondendo tanto os itens de baixo quanto a própria barra de
-// rolagem interna do painel (que existe no CSS, mas nunca aparecia
-// porque a região onde ela ficaria já tinha sido cortada). O mesmo
-// pode acontecer no formulário principal em telas pequenas (mobile),
-// onde sobra pouco espaço vertical.
-//
-// A correção: ao abrir, o painel é (1) reparentado para ser filho
-// direto de <body> — isso evita qualquer clipping por overflow de
-// ancestrais, e também evita que `backdrop-filter` em ancestrais
-// (usado em .card/.login-box) crie um "containing block" alternativo
-// para elementos fixed, o que bagunçaria as coordenadas calculadas
-// abaixo — e (2) posicionado com `position: fixed` usando a posição
-// REAL do botão-gatilho na tela (getBoundingClientRect), com
-// max-height calculado a partir do espaço realmente disponível até a
-// borda da tela. Se não houver espaço suficiente abaixo do botão
-// (comum no mobile, com o navbar fixo ocupando a parte de baixo), o
-// painel abre para CIMA automaticamente.
 function posicionarEReparentarPainel(trigger, panel) {
     if (panel.parentElement !== document.body) {
         document.body.appendChild(panel);
     }
 
     const rect            = trigger.getBoundingClientRect();
-    const margem           = 10; // respiro antes da borda da tela / navbar mobile
+    const margem           = 10;
     const espacoAbaixo      = window.innerHeight - rect.bottom - margem;
     const espacoAcima       = rect.top - margem;
-    const alturaMaximaBase  = 280; // mesmo valor do max-height original em style.css
+    const alturaMaximaBase  = 280;
     const abreParaCima      = espacoAbaixo < 160 && espacoAcima > espacoAbaixo;
     const alturaDisponivel  = abreParaCima ? espacoAcima : espacoAbaixo;
 
@@ -1272,10 +1102,6 @@ function posicionarEReparentarPainel(trigger, panel) {
     }
 }
 
-// Reposiciona (ou fecha, se não for mais possível calcular) qualquer
-// painel de categoria aberto quando a janela é redimensionada — evita
-// que o painel fique flutuando num lugar errado após rotacionar o
-// celular ou redimensionar a janela no desktop.
 function religarReposicionamentoAoRedimensionar() {
     window.addEventListener('resize', () => {
         const combinacoes = [
@@ -1292,27 +1118,6 @@ function religarReposicionamentoAoRedimensionar() {
     });
 }
 
-// CORREÇÃO — "painel voando pela tela": como o painel usa
-// `position: fixed` (coordenadas fixas na TELA, calculadas uma única
-// vez no momento em que abre), ele NÃO acompanha sozinho a rolagem de
-// nenhum contêiner — nem da página, nem do `.card` onde o formulário
-// vive (que tem overflow-y:auto), nem do `.modal__content` do modal de
-// edição. Resultado: ao rolar qualquer um desses, o botão-gatilho se
-// move (some de vista, inclusive), mas o painel fica parado nas
-// coordenadas antigas — visualmente "flutuando" desconectado do botão
-// que o abriu, como nos prints.
-//
-// A correção mais simples e robusta aqui não é tentar recalcular a
-// posição a cada pixel de rolagem (caro, e ainda daria uma sensação
-// de "grude" estranha) — é simplesmente FECHAR o painel assim que
-// qualquer rolagem acontecer FORA dele. Rolagens DENTRO do próprio
-// painel (o usuário passando o dedo/mouse pela lista de categorias)
-// são explicitamente ignoradas, senão seria impossível rolar a lista.
-//
-// `addEventListener(..., true)` com `true` no fim = fase de captura:
-// é o que permite pegar eventos de "scroll" de QUALQUER elemento
-// rolável da página (scroll não borbulha normalmente, só é capturado
-// na fase de captura, de cima para baixo a partir do document).
 function handleScrollGlobalFechaPaineisCategoria(e) {
     const paineis = [
         { id: 'transCategoryPanel',     fechar: fecharPainelDeCategorias },
@@ -1324,7 +1129,7 @@ function handleScrollGlobalFechaPaineisCategoria(e) {
         if (!panel || panel.classList.contains('hidden')) return;
 
         const alvo = e.target;
-        if (alvo && panel.contains(alvo)) return; // rolagem dentro do próprio painel — ignora
+        if (alvo && panel.contains(alvo)) return;
 
         fechar();
     });
@@ -1334,8 +1139,6 @@ function religarFechamentoAoRolar() {
     document.addEventListener('scroll', handleScrollGlobalFechaPaineisCategoria, true);
 }
 
-// Liga os cliques nas opções do painel (delegação simples, já que o
-// painel inteiro é recriado a cada carga de categorias).
 function ligarCliquesDoPainel() {
     const panel = document.getElementById('transCategoryPanel');
     if (!panel) return;
@@ -1393,16 +1196,11 @@ async function populateCategorySelect() {
     }
 }
 
-// Chamada ao entrar na aba "Transações". Só refaz a consulta se a
-// última tentativa não deu certo — evita chamadas repetidas quando
-// já está tudo carregado.
 async function garantirCategoriasCarregadas() {
     if (categoriasEstado === 'ok' || categoriasEstado === 'carregando') return;
     await populateCategorySelect();
 }
 
-// Botão do dropdown: se estiver em erro/vazio, toca -> tenta de novo;
-// se estiver ok, abre/fecha o painel. Clique fora ou Esc fecham.
 function initTransCategoryRetry() {
     const trigger = document.getElementById('transCategoryTrigger');
     const wrapper = document.getElementById('transCategoryWrapper');
@@ -1420,11 +1218,6 @@ function initTransCategoryRetry() {
 
     document.addEventListener('click', (e) => {
         const panel = document.getElementById('transCategoryPanel');
-        // O painel agora pode estar reparentado para <body> (ver
-        // posicionarEReparentarPainel) — por isso a checagem de "clique
-        // fora" precisa considerar também o próprio painel, não só o
-        // wrapper original, senão clicar dentro do painel (ex: na barra
-        // de rolagem) fecharia o dropdown por engano.
         if (!wrapper.contains(e.target) && !(panel && panel.contains(e.target))) {
             fecharPainelDeCategorias();
         }
@@ -1438,6 +1231,7 @@ function initTransCategoryRetry() {
 async function initializeApp() {
     initTransCategoryRetry();
     initHistoryFilters();
+    initDashboardFilters();
     initEditCategoryDropdown();
     religarReposicionamentoAoRedimensionar();
     religarFechamentoAoRolar();
@@ -1446,7 +1240,6 @@ async function initializeApp() {
         const ok = await waitForSupabase();
         if (!ok) throw new Error('Supabase não inicializou');
 
-        // Restaura sessão persistida, se existir
         const user = await AuthModule.checkSession();
         if (user) {
             await routeByRole(user, AuthModule.getUserRole());

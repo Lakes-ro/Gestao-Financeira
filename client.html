@@ -133,7 +133,38 @@
             <!-- DASHBOARD CLIENTE -->
             <section id="cli-dashboard" class="view-section active">
                 <div class="card">
-                    <h3>📊 Resumo do Mês</h3>
+                    <div class="card__header-row">
+                        <h3>📊 Resumo do Período</h3>
+                    </div>
+
+                    <!-- Filtro de período do Dashboard — mesma lógica do
+                         Histórico (Todos/Hoje/7 dias/Este mês/Mês
+                         passado/Personalizado). Ver app.js:
+                         initDashboardFilters()/getFiltroDashboardAtual(). -->
+                    <div class="history-filters dashboard-filters">
+                        <div class="form-group">
+                            <label>Período</label>
+                            <select id="dashPeriodoRapido">
+                                <option value="todos">Todos os lançamentos</option>
+                                <option value="hoje">Hoje</option>
+                                <option value="7dias">Últimos 7 dias</option>
+                                <option value="mes" selected>Este mês</option>
+                                <option value="mes_passado">Mês passado</option>
+                                <option value="personalizado">Personalizado</option>
+                            </select>
+                        </div>
+                        <div class="history-filters__custom-range hidden" id="dashPeriodoPersonalizadoRow">
+                            <div class="form-group">
+                                <label>De</label>
+                                <input type="date" id="dashDataInicio">
+                            </div>
+                            <div class="form-group">
+                                <label>Até</label>
+                                <input type="date" id="dashDataFim">
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="resume-grid">
                         <div class="resume-item receita">
                             <span class="label">Receitas</span>
@@ -165,6 +196,10 @@
                         <div class="bi-item">
                             <span class="bi-label">Investimentos</span>
                             <span class="bi-value" id="biInvestments">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Dívidas e Financiamentos</span>
+                            <span class="bi-value" id="biDebt">R$ 0,00</span>
                         </div>
                         <div class="bi-item">
                             <span class="bi-label">Renda Passiva</span>
@@ -221,12 +256,6 @@
 
                 <!-- ============================================================
                      IMPORTAÇÃO DE EXTRATO (OFX/CSV)
-                     Fluxo: escolher arquivo -> Processar (parseia +
-                     classifica cada linha, sem salvar nada ainda) ->
-                     tabela de revisão aparece -> cliente confere/corrige
-                     tipo e categoria linha a linha -> Confirmar Importação
-                     (só aí grava no banco em lote + aprende as correções).
-                     Toda a lógica vive em importacao-extrato.js.
                 ============================================================ -->
                 <div class="card">
                     <h3>📥 Importar Extrato (OFX/CSV)</h3>
@@ -266,6 +295,7 @@
                                 <tbody id="importReviewTableBody"></tbody>
                             </table>
                         </div>
+                        <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()" style="margin:14px 0 4px;">+ Criar categoria personalizada</button>
                         <div class="import-review__actions">
                             <button type="button" class="btn--secondary btn" id="btnCancelarImportacao">Cancelar</button>
                             <button type="button" class="btn btn--primary" id="btnConfirmarImportacao">✓ Confirmar Importação</button>
@@ -273,42 +303,51 @@
                     </div>
                 </div>
 
+                <!-- HISTÓRICO — agora recolhível: o cabeçalho é um botão
+                     (.btn-collapse) que abre/fecha #historicoConteudo
+                     (filtros + lista) via toggleHistoricoCard() (app.js). -->
                 <div class="card">
-                    <h3>📋 Histórico</h3>
+                    <button type="button" class="btn-collapse" onclick="toggleHistoricoCard()">
+                        <span>📋 Histórico</span>
+                        <span class="collapse-icon" id="historicoCollapseIcon">▾</span>
+                    </button>
 
-                    <div class="history-filters">
-                        <div class="form-group">
-                            <label>Período</label>
-                            <select id="histPeriodoRapido">
-                                <option value="todos">Todos os lançamentos</option>
-                                <option value="hoje">Hoje</option>
-                                <option value="7dias">Últimos 7 dias</option>
-                                <option value="mes">Este mês</option>
-                                <option value="personalizado">Personalizado</option>
-                            </select>
-                        </div>
-                        <div class="history-filters__custom-range hidden" id="histPeriodoPersonalizadoRow">
+                    <div id="historicoConteudo">
+                        <div class="history-filters" style="margin-top:16px;">
                             <div class="form-group">
-                                <label>De</label>
-                                <input type="date" id="histDataInicio">
+                                <label>Período</label>
+                                <select id="histPeriodoRapido">
+                                    <option value="todos">Todos os lançamentos</option>
+                                    <option value="hoje">Hoje</option>
+                                    <option value="7dias">Últimos 7 dias</option>
+                                    <option value="mes">Este mês</option>
+                                    <option value="mes_passado">Mês passado</option>
+                                    <option value="personalizado">Personalizado</option>
+                                </select>
+                            </div>
+                            <div class="history-filters__custom-range hidden" id="histPeriodoPersonalizadoRow">
+                                <div class="form-group">
+                                    <label>De</label>
+                                    <input type="date" id="histDataInicio">
+                                </div>
+                                <div class="form-group">
+                                    <label>Até</label>
+                                    <input type="date" id="histDataFim">
+                                </div>
                             </div>
                             <div class="form-group">
-                                <label>Até</label>
-                                <input type="date" id="histDataFim">
+                                <label>Tipo</label>
+                                <select id="histFiltroTipo">
+                                    <option value="">Todos</option>
+                                    <option value="receita">Receitas</option>
+                                    <option value="despesa">Despesas</option>
+                                </select>
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Tipo</label>
-                            <select id="histFiltroTipo">
-                                <option value="">Todos</option>
-                                <option value="receita">Receitas</option>
-                                <option value="despesa">Despesas</option>
-                            </select>
-                        </div>
-                    </div>
 
-                    <div id="transactionHistoryList" class="transactions-list">
-                        <p class="empty-state">Nenhuma transação registada</p>
+                        <div id="transactionHistoryList" class="transactions-list">
+                            <p class="empty-state">Nenhuma transação registada</p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -347,6 +386,7 @@
             <section id="cli-planning" class="view-section">
                 <div class="card">
                     <h3>📊 Planejamento Personalizado</h3>
+                    <div id="clientPlanningRequestArea"></div>
                     <div id="clientPlanningList">
                         <p class="empty-state">Aguardando planejamento do administrador...</p>
                     </div>
@@ -359,9 +399,6 @@
 
 <!-- ============================================================
      MODAL: NOVA CATEGORIA PERSONALIZADA
-     Cliente informa só Nome + Tipo; o classificador (simulado —
-     ver categoria-personalizada.js) decide o grupo do BI e corrige
-     o tipo se fizer sentido, antes de salvar.
 ============================================================ -->
 <div id="modalNovaCategoria" class="modal hidden">
     <div class="modal__content" style="max-width:440px;">
@@ -410,10 +447,29 @@
 </div>
 
 <!-- ============================================================
+     MODAL: SOLICITAR PLANEJAMENTO
+============================================================ -->
+<div id="modalSolicitarPlanejamento" class="modal hidden">
+    <div class="modal__content" style="max-width:440px;">
+        <header class="modal__header">
+            <h2>📩 Solicitar Planejamento</h2>
+            <button onclick="closeModal('modalSolicitarPlanejamento')" class="modal__close-btn">✕</button>
+        </header>
+        <div class="modal__body">
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                O administrador vai receber um aviso e criar um planejamento personalizado pra você.
+            </p>
+            <div class="form-group">
+                <label>Quer contar alguma coisa específica? (opcional)</label>
+                <textarea id="solicitarPlanejamentoMensagem" rows="4" placeholder="Ex: Quero focar em juntar dinheiro para uma viagem no fim do ano..."></textarea>
+            </div>
+            <button type="button" onclick="handleEnviarSolicitacaoPlanejamento()" id="btnEnviarSolicitacaoPlanejamento" class="btn btn--primary" style="width:100%;">Enviar Solicitação</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
      MODAL: EDITAR TRANSAÇÃO
-     Permite corrigir categoria, valor, data e descrição de uma
-     transação já lançada, ou excluí-la (ex: categoria errada,
-     valor digitado errado, pagamento estornado pelo banco).
 ============================================================ -->
 <div id="editTransactionModal" class="modal hidden">
     <div class="modal__content" style="max-width:460px;">
@@ -462,14 +518,6 @@
 
 <!-- ============================================================
      SCRIPTS — ORDEM CRÍTICA
-     Esta página trata SOMENTE do fluxo do cliente. O painel do
-     administrador vive em admin.html e é acedido via redirect
-     (ver routeByRole em app.js).
-
-     smart-input.js DEVE vir depois de database.js/ui.js/app.js
-     (usa DatabaseModule e UIModule) e ANTES de
-     categoria-personalizada.js (ambos mexem no formulário de
-     transação, mas são independentes um do outro).
 ============================================================ -->
 <script src="config.js"></script>
 <script src="ui.js"></script>

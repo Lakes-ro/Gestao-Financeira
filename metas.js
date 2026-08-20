@@ -5,19 +5,25 @@
  *             loadAllClientes, openModal, closeModal,
  *             showToast, formatCurrency (admin.js)
  *
- * CORREÇÃO DE SCHEMA (erro 400 confirmado no console do navegador):
- * a tabela `metas` NÃO tem as colunas `cliente_id` nem `titulo`.
- * As colunas reais são `client_id` e `nome` — confirmado por
- * database.js/goals.js/app.js, que já leem e gravam metas com
- * sucesso no lado do cliente usando exatamente esses nomes.
+ * CORREÇÃO DE SCHEMA: a tabela `metas` usa `client_id`/`nome` (não
+ * `cliente_id`/`titulo`). Sem ordenação por data (nenhuma coluna de
+ * data confirmada existir em `metas`).
  *
- * A ordenação por `criado_em` foi REMOVIDA (não adicionada com outro
- * nome). Não existe, em nenhum outro ficheiro do projeto, uma
- * referência confirmada a uma coluna de data em `metas` — inventar
- * um nome (ex: created_at) sem evidência geraria o mesmo tipo de
- * erro 400. Se a tabela tiver uma coluna de data, diga o nome exato
- * que eu adiciono a ordenação de volta.
+ * ATUALIZAÇÃO — FILTROS (cliente + faixa de progresso):
+ * A grid de metas não tinha nenhuma forma de filtrar — com muitos
+ * clientes/metas, ficava difícil achar rapidamente "quem está com a
+ * meta zerada" ou "as metas de um cliente específico". Agora existe:
+ *   - `#metas-filter-cliente`: mostra só as metas de um cliente, ou
+ *     "Todos".
+ *   - `#metas-filter-progresso`: "Todas", "Sem progresso (0%)",
+ *     "Baixo progresso (< 25%)", "Em andamento (25% a 99%)",
+ *     "Concluídas (100%+)".
+ * `metasCache` guarda a última lista carregada do banco — trocar de
+ * filtro NÃO refaz a consulta, só reaplica o filtro em memória (mesmo
+ * padrão já usado em categorias.js/razonete.js).
  */
+
+let metasCache = [];
 
 function initMetas() {
   document.getElementById('btn-add-meta')
@@ -26,6 +32,12 @@ function initMetas() {
   document.getElementById('btn-salvar-meta')
     ?.addEventListener('click', salvarMeta);
 
+  document.getElementById('metas-filter-cliente')
+    ?.addEventListener('change', renderMetasFiltradas);
+
+  document.getElementById('metas-filter-progresso')
+    ?.addEventListener('change', renderMetasFiltradas);
+
   window.addEventListener('section:change', ({ detail }) => {
     if (detail.section === 'metas') renderMetas();
   });
@@ -33,13 +45,31 @@ function initMetas() {
   renderMetas();
 }
 
-// ── Renderiza grid ────────────────────────────────────────────
+function popularFiltroClientesMetas() {
+  const select = document.getElementById('metas-filter-cliente');
+  if (!select) return;
+  const valorAtual = select.value;
+
+  select.innerHTML = '<option value="">Todos os clientes</option>' +
+    allClientes.map(c =>
+      `<option value="${c.id}" ${valorAtual === c.id ? 'selected' : ''}>${c.nome}</option>`
+    ).join('');
+}
+
+function calcularProgressoMeta(meta) {
+  return meta.valor_necessario > 0
+    ? (meta.valor_economizado / meta.valor_necessario) * 100
+    : 0;
+}
+
+// ── Carrega do banco ──────────────────────────────────────────
 async function renderMetas() {
   const grid = document.getElementById('metas-grid');
   if (!grid) return;
   grid.innerHTML = '<p class="empty-state">Carregando...</p>';
 
   if (!allClientes.length) await loadAllClientes();
+  popularFiltroClientesMetas();
 
   const clienteIds = allClientes.map(c => c.id);
   if (!clienteIds.length) {
@@ -54,17 +84,51 @@ async function renderMetas() {
 
   if (error) { showToast('Erro ao carregar metas: ' + error.message, 'error'); return; }
 
-  if (!data?.length) {
+  metasCache = data || [];
+  renderMetasFiltradas();
+}
+
+// ── Reaplica os filtros em memória (sem refetch) ────────────────
+function renderMetasFiltradas() {
+  const grid = document.getElementById('metas-grid');
+  if (!grid) return;
+
+  if (!metasCache.length) {
     grid.innerHTML = '<p class="empty-state">Nenhuma meta cadastrada.</p>';
     return;
   }
 
-  grid.innerHTML = data.map(meta => {
+  const filtroCliente    = document.getElementById('metas-filter-cliente')?.value || '';
+  const filtroProgresso  = document.getElementById('metas-filter-progresso')?.value || '';
+
+  let lista = metasCache;
+
+  if (filtroCliente) {
+    lista = lista.filter(m => m.client_id === filtroCliente);
+  }
+
+  if (filtroProgresso) {
+    lista = lista.filter(m => {
+      const pct = calcularProgressoMeta(m);
+      switch (filtroProgresso) {
+        case 'zero':        return pct <= 0;
+        case 'baixo':       return pct > 0 && pct < 25;
+        case 'andamento':   return pct >= 25 && pct < 100;
+        case 'concluida':   return pct >= 100;
+        default:            return true;
+      }
+    });
+  }
+
+  if (!lista.length) {
+    grid.innerHTML = '<p class="empty-state">Nenhuma meta encontrada para o filtro selecionado.</p>';
+    return;
+  }
+
+  grid.innerHTML = lista.map(meta => {
     const cliente = allClientes.find(c => c.id === meta.client_id);
-    const pct     = meta.valor_necessario > 0
-      ? Math.min(100, (meta.valor_economizado / meta.valor_necessario) * 100)
-      : 0;
-    const barColor = pct >= 100 ? '#00f5a0' : pct >= 50 ? '#f5d623' : '#7b96ff';
+    const pct     = Math.min(100, calcularProgressoMeta(meta));
+    const barColor = pct >= 100 ? '#00f5a0' : pct >= 25 ? '#f5d623' : '#ff4d6d';
 
     return `
       <div class="card">
@@ -83,7 +147,7 @@ async function renderMetas() {
           </div>
           <div>
             <span class="meta-stat-label">Progresso</span>
-            <span class="meta-stat-value">${pct.toFixed(1)}%</span>
+            <span class="meta-stat-value">${calcularProgressoMeta(meta).toFixed(1)}%</span>
           </div>
         </div>
         <div class="meta-progress-bar">

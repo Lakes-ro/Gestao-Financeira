@@ -6,37 +6,34 @@
  * `categorias.cliente_id`:
  *   - cliente_id = NULL   → categoria global (padrão do sistema)
  *   - cliente_id = <uuid> → categoria pessoal, só visível/editável
- *     pelo próprio cliente (isolamento garantido por RLS no banco —
- *     ver migração 'categorias_multi_tenant_cliente_id').
+ *     pelo próprio cliente (isolamento garantido por RLS no banco).
  *
  * O cliente só informa Nome + Tipo (Receita/Despesa). O campo
- * `grupo` (essencial/estilo_de_vida/investimento/renda), que o BI
- * exige, é decidido por um classificador — o cliente NÃO escolhe
- * isso, e não precisa entender essa taxonomia interna.
+ * `grupo`, que o BI exige, é decidido por um classificador — o cliente
+ * NÃO escolhe isso.
  *
- * ⚠️ SOBRE A "IA" — LEIA ANTES DE ACHAR QUE ISSO É ENROLAÇÃO:
- * `classificarCategoriaComIA()` abaixo é uma SIMULAÇÃO — um
- * classificador por palavra-chave, não uma chamada real a um LLM.
- * Isso é proposital, não preguiça: uma chamada real a uma API de LLM
- * (OpenAI, Anthropic etc.) direto do JS do navegador exigiria
- * embutir uma chave de API no código-fonte público do site —
- * qualquer pessoa abre o DevTools, copia a chave, e gasta seu
- * crédito. Isso não é um detalhe menor, é uma falha de segurança que
- * eu não vou fingir que não existe só para entregar algo que "parece
- * usar IA de verdade".
+ * ⚠️ O CLASSIFICADOR NÃO PODE FORÇAR O TIPO — a sugestão é só uma
+ * MENSAGEM. `handleConfirmarNovaCategoria()` sempre lê o valor ATUAL
+ * do select no momento de salvar.
  *
- * O caminho correto: criar uma Supabase Edge Function que guarda a
- * chave da API no servidor; o front-end chama só a URL dessa
- * function (sem chave nenhuma exposta). A função abaixo já é `async`
- * e já recebe/retorna exatamente o formato que essa troca exigiria —
- * no dia em que a Edge Function existir, é só trocar o CORPO desta
- * função por um `fetch` pra ela. Posso montar essa Edge Function
- * quando vocês quiserem — é rápido.
+ * ⚠️ SOBRE A "IA" — `classificarCategoriaComIA()` é uma SIMULAÇÃO — um
+ * classificador por palavra-chave, não uma chamada real a um LLM (ver
+ * nota completa mais abaixo sobre por que embutir uma chave de API de
+ * LLM direto no JS do navegador não é seguro).
+ *
+ * ATUALIZAÇÃO — PLANO DE CONTAS ROBUSTO (EVITA DUPLICAR CATEGORIA):
+ * Antes de classificar, o sistema agora verifica se já existe alguma
+ * categoria (global do admin, ou já criada pelo próprio cliente antes)
+ * que reconheceria esse mesmo termo — seja pelo NOME dela, seja por um
+ * dos SINÔNIMOS cadastrados pelo admin em `categorias.palavras_chave`
+ * (ex: o admin cadastrou "Aluguel Ganho" com os sinônimos "aluguel
+ * ganho, aluguel recebido, recebimento de aluguel"; se o cliente for
+ * criar "Aluguel Recebido" do zero, o sistema avisa que já existe
+ * "Aluguel Ganho" cobrindo esse termo). Isso é só um AVISO — o cliente
+ * continua com controle total e pode confirmar e criar a categoria
+ * nova mesmo assim, se preferir.
  */
 
-// ── Base de palavras-chave do classificador simulado ──────────
-// Cada entrada: [regex sobre o nome, grupo do BI, tipo esperado].
-// A primeira regra que bater no nome digitado vence.
 const REGRAS_CLASSIFICACAO_CATEGORIA = [
     // Renda
     [/sal[aá]rio|holerite|pr[oó]-labore/i,                       'renda',          'receita'],
@@ -44,11 +41,18 @@ const REGRAS_CLASSIFICACAO_CATEGORIA = [
     [/dividendo|jcp|rendimento/i,                                  'renda',          'receita'],
     [/renda extra|extra/i,                                         'renda',          'receita'],
 
+    // Transferência interna (neutro — não conta como receita/despesa)
+    [/transfer[eê]ncia entre contas|transfer[eê]ncia interna|entre contas|pix para mim mesmo/i, 'transferencia', 'despesa'],
+
+    // Dívidas e Financiamentos (isolado de essencial/estilo de vida)
+    [/financiamento|empr[eé]stimo|parcelamento da d[ií]vida|renegocia[çc][ãa]o/i, 'divida', 'despesa'],
+    [/fatura|cart[aã]o de cr[eé]dito/i,                            'divida',         'despesa'],
+
     // Investimento (poupança/aportes — nem essencial nem estilo de vida)
     [/investimento|aporte|previd[eê]ncia|reserva|poupan[çc]a/i,   'investimento',   'despesa'],
 
     // Essencial (sobrevivência)
-    [/luz|energia|[aá]gua|g[aá]s\b|condom[ií]nio|aluguel|financiamento|iptu/i, 'essencial', 'despesa'],
+    [/luz|energia|[aá]gua|g[aá]s\b|condom[ií]nio|aluguel|iptu/i,  'essencial',      'despesa'],
     [/mercado|supermercado|feira|a[çc]ougue/i,                     'essencial',      'despesa'],
     [/farm[aá]cia|m[eé]dico|consulta|plano de sa[uú]de|hospital/i, 'essencial',      'despesa'],
     [/escola|faculdade|curso|mensalidade/i,                        'essencial',      'despesa'],
@@ -61,42 +65,31 @@ const REGRAS_CLASSIFICACAO_CATEGORIA = [
     [/shopping|roupa|compra/i,                                     'estilo_de_vida', 'despesa'],
 ];
 
-/**
- * Classifica uma categoria a partir do nome (heurística — ver nota
- * de segurança no topo do arquivo). Retorna:
- *   { tipo, grupo, corrigido, motivo }
- * `corrigido` é true quando o tipo sugerido difere do que o cliente
- * escolheu (ex: cliente marcou "Salário" como despesa por engano).
- */
 async function classificarCategoriaComIA(nome, tipoInformado) {
-    // Simula a latência de uma chamada de rede real — remover
-    // quando isto virar um fetch de verdade pra uma Edge Function.
     await new Promise(resolve => setTimeout(resolve, 400));
 
     const regra = REGRAS_CLASSIFICACAO_CATEGORIA.find(([regex]) => regex.test(nome));
 
     if (!regra) {
-        // Sem palavra-chave reconhecida: mantém o tipo informado e
-        // usa o grupo mais neutro possível para esse tipo.
         const grupoPadrao = tipoInformado === 'receita' ? 'renda' : 'estilo_de_vida';
         return {
-            tipo: tipoInformado,
-            grupo: grupoPadrao,
+            tipoSugerido: tipoInformado,
+            grupoParaTipoSugerido: grupoPadrao,
             corrigido: false,
-            motivo: 'Não reconheci essa categoria — mantive o tipo que você escolheu e usei um grupo padrão.'
+            motivo: 'Não consegui identificar automaticamente essa categoria, mas não tem problema — ela foi criada exatamente do jeito que você escolheu e já pode ser usada normalmente.'
         };
     }
 
-    const [, grupo, tipoEsperado] = regra;
-    const corrigido = tipoEsperado !== tipoInformado;
+    const [, grupoSugerido, tipoSugerido] = regra;
+    const corrigido = tipoSugerido !== tipoInformado;
 
     return {
-        tipo: tipoEsperado,
-        grupo,
+        tipoSugerido,
+        grupoParaTipoSugerido: grupoSugerido,
         corrigido,
         motivo: corrigido
-            ? `"${nome}" parece ser ${tipoEsperado === 'receita' ? 'uma receita' : 'uma despesa'}, não ${tipoInformado === 'receita' ? 'uma receita' : 'uma despesa'} — corrigi automaticamente.`
-            : `Categoria classificada como ${tipoEsperado === 'receita' ? 'receita' : 'despesa'}.`
+            ? `"${nome}" normalmente é ${tipoSugerido === 'receita' ? 'uma receita (dinheiro que entra)' : 'uma despesa (dinheiro que sai)'}. Se for esse o seu caso, mude a opção "Tipo" acima antes de confirmar — mas se você tem certeza que é ${tipoInformado === 'receita' ? 'uma receita' : 'uma despesa'} mesmo (ex: você RECEBE aluguel, em vez de pagar), pode deixar como está e confirmar do mesmo jeito.`
+            : `Tudo certo! "${nome}" foi reconhecida como ${tipoSugerido === 'receita' ? 'uma receita' : 'uma despesa'}.`
     };
 }
 
@@ -105,7 +98,7 @@ let sugestaoIACategoria = null;
 
 function abrirModalNovaCategoria() {
     document.getElementById('novaCategoriaNome').value = '';
-    document.getElementById('novaCategoriaTipo').value = 'despesa';
+    document.getElementById('novaCategoriaTipo').value = 'receita';
     sugestaoIACategoria = null;
 
     const sugestaoEl = document.getElementById('novaCategoriaSugestao');
@@ -131,8 +124,34 @@ async function handleClassificarNovaCategoria() {
     try {
         sugestaoIACategoria = await classificarCategoriaComIA(nome, tipoInformado);
 
+        // Verifica se já existe uma categoria (global ou já criada pelo
+        // próprio cliente) que reconheceria este termo, via nome ou via
+        // sinônimos cadastrados pelo admin — evita criar duplicata de
+        // algo que já existe sob outro nome/variação de texto.
+        let categoriaExistente = null;
+        try {
+            const categoriasExistentes = await DatabaseModule.getCategorias();
+            if (typeof encontrarCategoriaPorPalavraChave === 'function') {
+                categoriaExistente = encontrarCategoriaPorPalavraChave(categoriasExistentes, nome);
+            }
+            if (!categoriaExistente) {
+                const nomeNormalizado = typeof normalizarTexto === 'function' ? normalizarTexto(nome) : nome.toLowerCase();
+                categoriaExistente = categoriasExistentes.find(c =>
+                    (typeof normalizarTexto === 'function' ? normalizarTexto(c.nome) : c.nome.toLowerCase()) === nomeNormalizado
+                ) || null;
+            }
+        } catch (_) {
+            // Falha ao checar duplicidade não deve impedir o fluxo normal.
+        }
+
         const sugestaoEl = document.getElementById('novaCategoriaSugestao');
-        sugestaoEl.textContent = '🤖 ' + sugestaoIACategoria.motivo;
+        let texto = '🤖 ' + sugestaoIACategoria.motivo;
+
+        if (categoriaExistente) {
+            texto += `\n\n⚠️ Já existe uma categoria parecida: "${categoriaExistente.nome}". Considere usar essa em vez de criar uma nova, para não duplicar o plano de contas. Se preferir mesmo assim, pode confirmar e criar a sua própria categoria normalmente.`;
+        }
+
+        sugestaoEl.textContent = texto;
         sugestaoEl.classList.remove('hidden');
 
         btn.classList.add('hidden');
@@ -154,6 +173,12 @@ async function handleConfirmarNovaCategoria() {
 
     if (!nome || !clientId) { UIModule.showError('Não foi possível identificar a categoria ou o cliente.'); return; }
 
+    const tipoFinal = document.getElementById('novaCategoriaTipo').value;
+
+    const grupoFinal = (tipoFinal === sugestaoIACategoria.tipoSugerido)
+        ? sugestaoIACategoria.grupoParaTipoSugerido
+        : (tipoFinal === 'receita' ? 'renda' : 'estilo_de_vida');
+
     const btn = document.getElementById('btnConfirmarCategoria');
     btn.disabled = true;
     btn.textContent = 'Salvando...';
@@ -161,16 +186,22 @@ async function handleConfirmarNovaCategoria() {
     try {
         const { error } = await supabaseClient.from('categorias').insert({
             nome,
-            tipo:       sugestaoIACategoria.tipo,
-            grupo:      sugestaoIACategoria.grupo,
-            cliente_id: clientId
+            tipo:       tipoFinal,
+            grupo:      grupoFinal,
+            cliente_id: clientId,
+            revisado:   false
         });
 
         if (error) throw error;
 
-        UIModule.showSuccess('Categoria criada!');
+        UIModule.showSuccess('Categoria criada! O administrador vai revisar a classificação dela em breve.');
         UIModule.closeModal('modalNovaCategoria');
-        await populateCategorySelect(); // recarrega o <select>, já incluindo a categoria nova
+
+        await populateCategorySelect();
+
+        if (typeof atualizarCategoriasNaTabelaImportacao === 'function') {
+            await atualizarCategoriasNaTabelaImportacao();
+        }
     } catch (err) {
         console.error('❌ handleConfirmarNovaCategoria:', err.message);
         UIModule.showError('Erro ao salvar categoria: ' + err.message);

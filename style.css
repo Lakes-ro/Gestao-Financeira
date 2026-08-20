@@ -9,6 +9,10 @@
    histórico) e .transaction-value-actions/.transaction-actions/
    .btn-transaction-edit/.btn-transaction-delete (botões ✏️/🗑️ por
    transação). Ver blocos correspondentes nos media queries também.
+
+   ATUALIZAÇÃO — .categoria-sugestao-ia ganhou white-space: pre-line
+   para suportar o aviso multi-linha de "já existe uma categoria
+   parecida" (ver categoria-personalizada.js).
    ============================================================ */
 
 /* ── Reset ─────────────────────────────────────────────────── */
@@ -268,13 +272,7 @@ input::placeholder {
 }
 
 /* ── Dropdown de categoria — 100% nosso, sem depender do picker
-   nativo do sistema operacional. Foi trocado por causa disso: um
-   <select>/<optgroup> nativo ignora todo o CSS da página (o SO
-   desenha o cabeçalho do grupo com fundo branco, largura própria,
-   etc.) — impossível de restilizar. Aqui o "select" é só um botão +
-   um painel <div> normal, então tudo (cor, largura, grupo) é 100%
-   controlado por este CSS. Reaproveitado também no modal de edição
-   de transação (ids diferentes, mesmas classes). ── */
+   nativo do sistema operacional. ── */
 .custom-select {
   position: relative;
 }
@@ -339,11 +337,6 @@ input::placeholder {
   border: 1px solid rgba(100, 150, 255, 0.35);
   border-radius: var(--radius);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
-  /* z-index acima do .modal (10000): quando o painel é reparentado
-     para <body> (ver posicionarEReparentarPainel em app.js), ele vira
-     IRMÃO do modal no DOM, e precisa vencer o z-index do modal para
-     continuar visível por cima dele — o que acontece sempre que o
-     dropdown é aberto de dentro do modal de edição de transação. */
   z-index: 10500;
   padding: 6px 0;
 }
@@ -409,6 +402,9 @@ input::placeholder {
   font-size: 13px;
   color: var(--text-mid);
   line-height: 1.5;
+  /* Preserva as quebras de linha do aviso de "categoria já existe"
+     (ver categoria-personalizada.js), sem precisar de <br> manual. */
+  white-space: pre-line;
 }
 
 .btn--logout {
@@ -516,8 +512,6 @@ input::placeholder {
    LAYOUT PÓS-LOGIN: SIDEBAR + MAIN
    ══════════════════════════════════════════════════════════════ */
 
-/* .layout-wrapper NÃO define display — quem faz isso é .screen.active { display: flex }
-   Colocar display:flex aqui sobrescreveria display:none do .screen em telas não ativas. */
 .layout-wrapper {
   flex-direction: row;
   min-height: 100vh;
@@ -592,20 +586,10 @@ input::placeholder {
   border-color: rgba(100, 150, 255, 0.42);
 }
 
-/* ── Perfil (contém o "Sair") ────────────────────────────────
-   Antes existia um .sidebar__footer separado com dois botões
-   (Perfil + Sair) disputando espaço no fim da sidebar/navbar.
-   Isso foi removido: agora "Perfil" é só mais um item do
-   .sidebar__nav (mesmo estilo dos demais), e o botão "Sair" vive
-   dentro do modal de perfil (clientProfileModal), que já o possui.
-   Resultado: um único ponto de acesso, visual 100% consistente
-   com os outros itens, tanto no desktop quanto no bottom navbar
-   mobile. */
 .sidebar__nav-item--profile {
   margin-top: auto;
 }
 
-/* Blocos de risco / planejamento (dentro da sidebar, desktop) */
 .sidebar__risk-block,
 .sidebar__plan-block {
   margin: 6px 0;
@@ -691,7 +675,6 @@ input::placeholder {
    COMPONENTES PÓS-LOGIN
    ══════════════════════════════════════════════════════════════ */
 
-/* Cabeçalho do cliente */
 .client-header {
   padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
@@ -709,7 +692,6 @@ input::placeholder {
   font-size: 14px;
 }
 
-/* View sections */
 .view-section {
   display: none;
   flex-direction: column;
@@ -721,7 +703,6 @@ input::placeholder {
   display: flex;
 }
 
-/* Section header */
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -753,6 +734,20 @@ input::placeholder {
 }
 
 .card.hidden { display: none; }
+
+/* Cabeçalho de card com um botão de colapsar ao lado do título (ex:
+   Histórico de transações) — mantém o h3 e o botão na mesma linha. */
+.card__header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.card__header-row h3 {
+  margin-bottom: 0;
+}
 
 /* ── Grids de resumo financeiro ─────────────────────────────── */
 .resume-grid {
@@ -812,12 +807,15 @@ input::placeholder {
   margin-bottom: 20px;
 }
 
-/* ── Filtros de período do Histórico (painel do cliente) ─────
-   Barra acima da lista de transações em cli-transactions: período
-   rápido (Todos/Hoje/7 dias/Este mês/Personalizado), campos de data
-   "De"/"Até" (só aparecem quando período = Personalizado) e filtro
-   por tipo (Receita/Despesa). Layout em grid que se adapta ao número
-   de campos visíveis; vira coluna única no mobile (ver media query). */
+/* ── Filtros de período (Histórico E Dashboard) ────────────────
+   Reaproveitada tanto pela barra de filtros do Histórico
+   (cli-transactions) quanto pela nova barra de filtros do Dashboard
+   (cli-dashboard, ver client.html/index.html + app.js
+   initDashboardFilters). Período rápido (Todos/Hoje/7 dias/Este
+   mês/Personalizado), campos de data "De"/"Até" (só aparecem quando
+   período = Personalizado) e, no Histórico, filtro por tipo. Layout
+   em grid que se adapta ao número de campos visíveis; vira coluna
+   única no mobile (ver media query). */
 .history-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -838,6 +836,15 @@ input::placeholder {
 
 .history-filters__custom-range.hidden {
   display: none;
+}
+
+/* Mesma barra de filtros, mas usada acima do Resumo do Mês/Análise
+   Financeira do Dashboard — sem a borda inferior (não há lista longa
+   logo abaixo dela dentro do mesmo card). */
+.dashboard-filters {
+  margin-bottom: 4px;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 /* ── Importação de Extrato (OFX/CSV) — status + tabela de revisão ── */
@@ -1020,7 +1027,6 @@ input::placeholder {
 .transaction-category    { color: var(--text-muted); font-size: 12px; }
 .transaction-date        { color: var(--text-muted); font-size: 11px; }
 
-/* Coluna à direita do item: valor em cima, botões de ação embaixo */
 .transaction-value-actions {
   display: flex;
   flex-direction: column;
@@ -1128,7 +1134,6 @@ input::placeholder {
   flex-wrap: wrap;
 }
 
-/* Client cards com indicador de risco */
 .client-card {
   background: #141a2e;
   border: 1px solid rgba(100, 149, 255, 0.15);
@@ -1395,14 +1400,12 @@ input::placeholder {
     z-index: 9999;
   }
 
-  /* Elementos que só existem no desktop */
   .sidebar__header,
   .sidebar__risk-block,
   .sidebar__plan-block {
     display: none;
   }
 
-  /* Nav vira row horizontal */
   .sidebar__nav {
     flex-direction: row;
     align-items: center;
@@ -1414,7 +1417,6 @@ input::placeholder {
     padding: 0;
   }
 
-  /* Cada item: emoji grande + label minúsculo */
   .sidebar__nav-item {
     display: flex;
     flex-direction: column;
@@ -1437,7 +1439,6 @@ input::placeholder {
     position: relative;
   }
 
-  /* Emoji: primeira palavra / caractere de cada item */
   .sidebar__nav-item::before {
     font-size: 20px;
     line-height: 1;
@@ -1455,7 +1456,6 @@ input::placeholder {
     border: none;
   }
 
-  /* Ponto indicador ativo */
   .sidebar__nav-item.active::after {
     content: '';
     position: absolute;
@@ -1469,10 +1469,6 @@ input::placeholder {
     box-shadow: 0 0 7px rgba(100, 200, 255, 0.7);
   }
 
-  /* Perfil: no mobile é só mais um item da barra, lado a lado
-     com os demais (mesmo flex:1, mesmo ícone em cima + label
-     embaixo). O margin-top:auto do desktop não se aplica aqui
-     (a barra é uma linha horizontal, não uma coluna). */
   .sidebar__nav-item--profile {
     margin-top: 0;
   }

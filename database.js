@@ -7,6 +7,15 @@
  * UPDATE/DELETE do próprio cliente (client_id = auth.uid()) — sem essa
  * correção, estas duas funções falhariam com 403 do mesmo jeito que o
  * INSERT falhava antes.
+ *
+ * ATUALIZAÇÃO — ORDEM "RECEITA ANTES DE DESPESA":
+ * getCategorias() ordenava por `tipo` ascendente — como 'despesa' vem
+ * antes de 'receita' em ordem alfabética, toda lista que consumia essa
+ * função (dropdown de transação, tabela de importação, listas do
+ * admin) acabava mostrando Despesas primeiro. Trocado para
+ * `ascending: false`, que — por 'receita' > 'despesa' alfabeticamente
+ * — sempre traz Receita primeiro, em qualquer tela que use esta
+ * função como fonte.
  */
 
 const DatabaseModule = (() => {
@@ -25,7 +34,7 @@ const DatabaseModule = (() => {
             const { data, error } = await supabaseClient
                 .from(CONFIG.TABLES.CATEGORIAS)
                 .select('*')
-                .order('tipo')
+                .order('tipo', { ascending: false }) // receita antes de despesa
                 .order('grupo')
                 .order('nome');
             if (error) throw error;
@@ -247,6 +256,16 @@ const DatabaseModule = (() => {
             return true;
         },
 
+        /**
+         * Planejamentos de um admin — feito via join com `clientes`
+         * (filtrando pelos client_id que pertencem a este admin), NÃO
+         * por uma coluna `planejamentos.admin_id` — essa coluna NÃO
+         * EXISTE na tabela (confirmado via Supabase MCP). Qualquer
+         * consulta direta a `planejamentos` filtrando por `admin_id`
+         * falha com erro 400 "column does not exist" — foi o que
+         * quebrava a aba Planejamentos do admin. planejamentos.js
+         * segue exatamente este mesmo padrão (client_id IN clientIds).
+         */
         async getPlanningsByAdmin(adminId) {
             const clients = await this.getClients(adminId);
             if (clients.length === 0) return [];

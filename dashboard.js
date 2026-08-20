@@ -12,11 +12,35 @@
  * mais o seletor "Vincular a uma Meta" em app.js) — isso é o que agora
  * mantém `metas.valor_economizado` sincronizado automaticamente.
  *
- * Esta atualização só torna a decomposição EXPLÍCITA (nomeando
- * `saldoDisponivel` e `totalAlocado` em vez de só `saldo`), para que a
- * UI possa exibir com clareza "Saldo Disponível" já descontando o que
- * está protegido em metas/investimentos — sem subtrair esse valor
- * DUAS vezes (ele já está dentro de totalDespesas).
+ * ATUALIZAÇÃO — GRUPOS 'divida' E 'transferencia':
+ *   - 'divida' (Dívidas e Financiamentos): despesa real, dinheiro que
+ *     sai de verdade do controle da pessoa — continua contando em
+ *     totalDespesas/saldo normalmente. A diferença é só de EXIBIÇÃO:
+ *     ganha um bucket próprio (custoDivida), isolado de
+ *     custoDeSobrevivencia/custoDeVida, para não distorcer essas duas
+ *     métricas com pagamento de empréstimo/financiamento.
+ *   - 'transferencia' (Transferências Internas): dinheiro que só MUDOU
+ *     DE LUGAR entre contas da mesma pessoa — não é receita nem
+ *     despesa de verdade. Fica de FORA do totalReceitas/totalDespesas/
+ *     saldoDisponivel por completo (soma à parte, em
+ *     totalTransferencias, só para efeito informativo).
+ *
+ * ATUALIZAÇÃO — DASHBOARD FILTRÁVEL POR PERÍODO:
+ * Antes, o "Resumo do Mês"/"Análise Financeira" sempre somava TODAS as
+ * transações do cliente desde o início (apesar do título dizer "do
+ * Mês"). Agora load()/renderClientDashboard() aceitam um `filtro`
+ * opcional ({ dataInicio, dataFim }, mesmo formato usado pelo filtro
+ * do Histórico em app.js) — os totais/BI passam a refletir só o
+ * período escolhido no novo seletor acima do Resumo (ver
+ * initDashboardFilters()/getFiltroDashboardAtual() em app.js). Sem
+ * filtro (dataInicio/dataFim ausentes), o comportamento é idêntico ao
+ * anterior — todas as transações.
+ *
+ * ATUALIZAÇÃO — MOEDA NO PADRÃO BRASILEIRO:
+ * Todo valor monetário exibido agora passa por
+ * `UIModule.formatCurrency()` (separador de milhar "." e decimal ",",
+ * ex: "R$ 150.132.456,00") em vez de `R$ ${valor.toFixed(2)}`
+ * ("R$ 150132456.00").
  */
 
 const DashboardModule = (() => {
@@ -26,11 +50,13 @@ const DashboardModule = (() => {
         const metrics = {
             custoDeSobrevivencia: 0,
             custoDeVida:          0,
+            custoDivida:          0, // categorias.grupo === 'divida' — empréstimos/financiamentos, isolado
             aportesInvestimento:  0, // categorias.grupo === 'investimento' — dinheiro já protegido/alocado
+            totalTransferencias:  0, // categorias.grupo === 'transferencia' — NÃO entra em receita/despesa/saldo
             rendaPassiva:         0, // categorias não distingue ativa/passiva hoje — fica sempre 0 (ver nota abaixo)
             rendaAtiva:           0,
             totalReceitas:        0,
-            totalDespesas:        0, // essencial + estilo_de_vida + investimento (todas as despesas, sem exceção)
+            totalDespesas:        0, // essencial + estilo_de_vida + investimento + divida (transferencia NUNCA entra aqui)
             saldo:                0, // ALIAS de saldoDisponivel — mantido para não quebrar quem já lê `.saldo`
             saldoDisponivel:      0, // = totalReceitas - totalDespesas (já exclui o alocado, pois investimento é uma despesa)
             totalAlocado:         0, // ALIAS de aportesInvestimento — nome explícito p/ exibição no dashboard
@@ -46,28 +72,40 @@ const DashboardModule = (() => {
         // que exista uma forma de marcar isso em `categorias`.
         transactions.forEach(t => {
             const valor = parseFloat(t.valor || 0);
+            const grupo = t.categorias?.grupo;
+
+            // Transferência interna: dinheiro só mudou de lugar — não é
+            // receita nem despesa de verdade. Registrada à parte, fora
+            // do cálculo de saldo, para não inflar nem distorcer nada
+            // (independe do tipo ser 'receita' ou 'despesa').
+            if (grupo === 'transferencia') {
+                metrics.totalTransferencias += valor;
+                return;
+            }
 
             if (t.tipo === 'receita') {
                 metrics.totalReceitas += valor;
                 metrics.rendaAtiva    += valor;
             } else {
                 metrics.totalDespesas += valor;
-                const grupo = t.categorias?.grupo;
                 if (grupo === 'essencial') {
                     metrics.custoDeSobrevivencia += valor;
                 } else if (grupo === 'investimento') {
                     metrics.aportesInvestimento += valor;
+                } else if (grupo === 'divida') {
+                    metrics.custoDivida += valor;
                 } else {
                     metrics.custoDeVida += valor;
                 }
             }
         });
 
-        // saldoDisponivel = tudo que entrou menos tudo que saiu. Como
-        // 'investimento' já é uma despesa somada em totalDespesas, o
-        // dinheiro alocado em metas/caixinhas JÁ está excluído aqui —
-        // não subtraímos aportesInvestimento de novo (isso duplicaria
-        // o desconto e mostraria um saldo menor do que o real).
+        // saldoDisponivel = tudo que entrou menos tudo que saiu (fora
+        // transferências, que não passam por aqui — ver return acima).
+        // Como 'investimento' e 'divida' já são despesas somadas em
+        // totalDespesas, o dinheiro alocado em metas/caixinhas e o
+        // pagamento de dívidas JÁ estão excluídos aqui — não subtraímos
+        // de novo (isso duplicaria o desconto).
         metrics.saldoDisponivel = metrics.totalReceitas - metrics.totalDespesas;
         metrics.saldo           = metrics.saldoDisponivel; // alias retrocompatível
         metrics.totalAlocado    = metrics.aportesInvestimento; // alias com nome explícito
@@ -83,7 +121,7 @@ const DashboardModule = (() => {
         const breakdown = {};
 
         transactions
-            .filter(t => t.tipo === 'despesa')
+            .filter(t => t.tipo === 'despesa' && t.categorias?.grupo !== 'transferencia')
             .forEach(t => {
                 const category = t.categorias?.nome || 'Sem Categoria';
                 breakdown[category] = (breakdown[category] || 0) + parseFloat(t.valor || 0);
@@ -95,14 +133,34 @@ const DashboardModule = (() => {
             .slice(0, 10);
     };
 
+    /**
+     * Filtra transações por `data_competencia` dentro do intervalo
+     * [dataInicio, dataFim] (ambos opcionais, formato 'YYYY-MM-DD').
+     * Sem filtro (objeto vazio/undefined), retorna a lista inteira —
+     * é isso que preserva o comportamento antigo (dashboard sem
+     * período nenhum aplicado) quando ninguém mexeu no seletor novo.
+     */
+    const filterByPeriod = (transactions, filtro = {}) => {
+        if (!filtro || (!filtro.dataInicio && !filtro.dataFim)) return transactions;
+        return transactions.filter(t => {
+            if (!t.data_competencia) return false;
+            if (filtro.dataInicio && t.data_competencia < filtro.dataInicio) return false;
+            if (filtro.dataFim && t.data_competencia > filtro.dataFim) return false;
+            return true;
+        });
+    };
+
     return {
-        async load(clientId) {
+        async load(clientId, filtro = {}) {
             try {
-                const transactions = await DatabaseModule.getTransactionsByClient(clientId);
+                const todasTransacoes = await DatabaseModule.getTransactionsByClient(clientId);
+                const transactions    = filterByPeriod(todasTransacoes, filtro);
+
                 cachedData = {
                     metrics: calculateMetrics(transactions),
                     categories: getCategoryBreakdown(transactions),
-                    transactions
+                    transactions,
+                    todasTransacoes // mantém a lista completa disponível (ex: outros módulos que não usam filtro)
                 };
                 return cachedData;
             } catch (error) {
@@ -111,14 +169,14 @@ const DashboardModule = (() => {
             }
         },
 
-        async renderClientDashboard(clientId) {
+        async renderClientDashboard(clientId, filtro = {}) {
             try {
-                const data = await this.load(clientId);
+                const data = await this.load(clientId, filtro);
                 const m = data.metrics;
 
-                UIModule.setText('totalReceitas', `R$ ${m.totalReceitas.toFixed(2)}`);
-                UIModule.setText('totalDespesas', `R$ ${m.totalDespesas.toFixed(2)}`);
-                UIModule.setText('saldo', `R$ ${m.saldoDisponivel.toFixed(2)}`);
+                UIModule.setText('totalReceitas', UIModule.formatCurrency(m.totalReceitas));
+                UIModule.setText('totalDespesas', UIModule.formatCurrency(m.totalDespesas));
+                UIModule.setText('saldo', UIModule.formatCurrency(m.saldoDisponivel));
 
                 // Subtexto opcional sob o Saldo, mostrando quanto já
                 // está protegido em metas/investimentos — só aparece se
@@ -126,12 +184,13 @@ const DashboardModule = (() => {
                 // classe .bi-detail reaproveitada dentro do resume-item
                 // do saldo). Não quebra nada se o elemento não existir.
                 UIModule.setText('saldoAlocadoDetalhe',
-                    m.totalAlocado > 0 ? `já descontado R$ ${m.totalAlocado.toFixed(2)} em Metas/Investimentos` : '');
+                    m.totalAlocado > 0 ? `já descontado ${UIModule.formatCurrency(m.totalAlocado)} em Metas/Investimentos` : '');
 
-                UIModule.setText('biSurvivalCost', `R$ ${m.custoDeSobrevivencia.toFixed(2)}`);
-                UIModule.setText('biLifestyleCost', `R$ ${m.custoDeVida.toFixed(2)}`);
-                UIModule.setText('biInvestments', `R$ ${m.aportesInvestimento.toFixed(2)}`);
-                UIModule.setText('biPassiveIncome', `R$ ${m.rendaPassiva.toFixed(2)}`);
+                UIModule.setText('biSurvivalCost', UIModule.formatCurrency(m.custoDeSobrevivencia));
+                UIModule.setText('biLifestyleCost', UIModule.formatCurrency(m.custoDeVida));
+                UIModule.setText('biInvestments', UIModule.formatCurrency(m.aportesInvestimento));
+                UIModule.setText('biDebt', UIModule.formatCurrency(m.custoDivida));
+                UIModule.setText('biPassiveIncome', UIModule.formatCurrency(m.rendaPassiva));
                 UIModule.setText('biCoverage', `${m.cobertura.toFixed(1)}%`);
 
                 return data;

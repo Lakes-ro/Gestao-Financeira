@@ -20,19 +20,26 @@
  *   cliente usa seu próprio cache em app.js, `clienteTransacoesCache`,
  *   e passa a lista explicitamente como 3º argumento, então este
  *   cache interno só importa para quem chamar loadAllTransactions()).
+ *
+ * ATUALIZAÇÃO — MOEDA NO PADRÃO BRASILEIRO:
+ * `formatTransaction()` usava `R$ ${valor.toFixed(2)}` — trocado por
+ * `UIModule.formatCurrency()` (separador de milhar "." e decimal ",").
  */
 
 const TransactionsModule = (() => {
     let allTransactions = [];
 
     // Rótulos legíveis para o campo `categorias.grupo` (essencial |
-    // estilo_de_vida | investimento | renda) — a tabela antiga
-    // (plano_de_contas) tinha um campo livre `macro_grupo`; a tabela
-    // correta (categorias) usa um enum fixo, por isso o mapeamento.
+    // estilo_de_vida | investimento | divida | transferencia | renda)
+    // — a tabela antiga (plano_de_contas) tinha um campo livre
+    // `macro_grupo`; a tabela correta (categorias) usa um enum fixo,
+    // por isso o mapeamento.
     const GRUPO_LABEL = {
         essencial:      'Essencial',
         estilo_de_vida: 'Estilo de Vida',
         investimento:   'Investimento',
+        divida:         'Dívida/Financiamento',
+        transferencia:  'Transferência Interna',
         renda:          'Renda'
     };
 
@@ -50,6 +57,8 @@ const TransactionsModule = (() => {
             ? `${clienteNome} — ${categoriaNome}${descricao}`
             : `${categoriaNome}${descricao}`;
 
+        const valorFormatado = UIModule.formatCurrency(t.valor);
+
         return `
             <div class="transaction-item ${t.tipo}" data-transaction-id="${t.id}">
                 <div class="transaction-info">
@@ -59,7 +68,7 @@ const TransactionsModule = (() => {
                 </div>
                 <div class="transaction-value-actions">
                     <div class="transaction-value ${t.tipo}">
-                        ${t.tipo === 'receita' ? '+' : '−'} R$ ${parseFloat(t.valor || 0).toFixed(2)}
+                        ${t.tipo === 'receita' ? '+' : '−'} ${valorFormatado}
                     </div>
                     <div class="transaction-actions">
                         <button type="button" class="btn-transaction-edit" data-id="${t.id}" title="Editar transação">✏️</button>

@@ -304,8 +304,7 @@
           <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
             Segue o plano de contas do modelo: 1.x Receitas, 2.x Despesas Fixas e Essenciais,
             3.x Investimentos e Futuro, 4.x Estilo de Vida e Despesas Variáveis. Deixe em branco se a
-            categoria não se encaixa em nenhuma conta específica do modelo — ela continua funcionando
-            normalmente, só aparece com o código do GRUPO em vez do código da conta.
+            categoria não se encaixa em nenhuma conta específica do modelo.
           </p>
         </div>
         <div class="form-group">
@@ -313,10 +312,7 @@
           <textarea id="categoria-palavras-chave" rows="3" placeholder="Ex: aluguel ganho, aluguel recebido, recebimento de aluguel"></textarea>
           <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
             Separe por vírgula. Qualquer um desses termos, em qualquer ordem, dentro da descrição
-            que o cliente digitar, faz o sistema reconhecer esta categoria automaticamente — mesmo
-            que o classificador padrão não conheça a expressão. O sistema também já reconhece
-            variações parecidas do NOME da categoria automaticamente (ex: "cabelo" já encontra
-            "Cabeleireiro" mesmo sem nenhum sinônimo cadastrado aqui).
+            que o cliente digitar, faz o sistema reconhecer esta categoria automaticamente.
           </p>
         </div>
       </div>
@@ -349,6 +345,116 @@
       <div class="modal-footer">
         <button class="btn-secondary" data-modal="modal-mesclar-categoria">Cancelar</button>
         <button class="btn-primary-sm" id="btn-confirmar-mesclagem" style="background: var(--accent-danger); color:#fff;">Mesclar e Deletar Origem</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Lançamentos para Cliente (Manual + Importar Extrato)
+       Ver lancamentos-admin.js — reaproveita smart-input.js e
+       importacao-extrato.js (mesmos ids de elemento na aba
+       "Importar Extrato") pra ter a mesma inteligência de
+       classificação já usada no painel do cliente. -->
+  <div id="modal-lancamentos-admin" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3>📥 Lançamentos para Cliente</h3>
+        <button class="modal-close" data-modal="modal-lancamentos-admin">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Cliente</label>
+          <select id="lancamentos-cliente-select">
+            <option value="">Selecione um cliente...</option>
+          </select>
+        </div>
+
+        <div id="lancamentos-conteudo" class="hidden">
+          <div class="lancamentos-admin__tabs">
+            <button type="button" class="lancamentos-admin__tab active" data-tab="manual">✍️ Lançamento Manual</button>
+            <button type="button" class="lancamentos-admin__tab" data-tab="importar">📥 Importar Extrato</button>
+          </div>
+
+          <!-- ABA: LANÇAMENTO MANUAL -->
+          <div class="lancamentos-admin__tab-content active" id="lancamentos-tab-manual">
+            <form id="lancamento-manual-form">
+              <div class="form-group">
+                <label>Descrição (opcional)</label>
+                <input type="text" id="lancamento-manual-descricao" placeholder="Ex: Supermercado, Salário do mês...">
+              </div>
+              <div class="form-group">
+                <label>Categoria</label>
+                <select id="lancamento-manual-categoria"></select>
+              </div>
+              <div class="form-row-admin">
+                <div class="form-group">
+                  <label>Valor (R$)</label>
+                  <input type="number" id="lancamento-manual-valor" placeholder="0,00" step="0.01" min="0.01" required>
+                </div>
+                <div class="form-group">
+                  <label>Data</label>
+                  <input type="date" id="lancamento-manual-data" required>
+                </div>
+              </div>
+              <button type="submit" class="btn-primary-sm" style="width:100%;">➕ Registrar Lançamento</button>
+            </form>
+
+            <div style="margin-top:1.5rem;">
+              <h4 style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem; text-transform:uppercase; letter-spacing:0.04em;">
+                Últimos lançamentos deste cliente
+              </h4>
+              <div id="lancamentos-admin-recentes" class="razonete-list">
+                <p class="empty-state">Selecione um cliente.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ABA: IMPORTAR EXTRATO — MESMOS IDS do painel do cliente
+               (ver client.html/index.html), pra importacao-extrato.js
+               funcionar aqui sem nenhuma alteração. -->
+          <div class="lancamentos-admin__tab-content" id="lancamentos-tab-importar">
+            <p class="panel-subtitle" style="margin-bottom:1rem;">
+              Envie o arquivo .ofx ou .csv que o cliente te mandou. O sistema classifica automaticamente
+              (sinônimos, regras do Nubank, grupos semânticos) — você revisa e corrige antes de confirmar.
+            </p>
+            <div class="form-group">
+              <label>Arquivo (.ofx ou .csv)</label>
+              <input type="file" id="importFileInput" accept=".ofx,.csv,text/csv,application/vnd.intu.qbo">
+            </div>
+            <button type="button" class="btn-action" id="btnProcessarImportacao">Processar Arquivo</button>
+
+            <div id="importResumoStatus" class="import-status hidden"></div>
+
+            <div id="importReviewContainer" class="import-review hidden">
+              <div class="import-review__header">
+                <h4>Revise antes de importar</h4>
+                <label class="import-review__select-all">
+                  <input type="checkbox" id="importSelecionarTodas" checked>
+                  Selecionar todas
+                </label>
+              </div>
+              <div class="import-review__table-wrapper">
+                <table class="import-review__table" id="importReviewTable">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>Data</th>
+                      <th>Descrição</th>
+                      <th>Valor</th>
+                      <th>Tipo</th>
+                      <th>Categoria</th>
+                      <th>Origem</th>
+                    </tr>
+                  </thead>
+                  <tbody id="importReviewTableBody"></tbody>
+                </table>
+              </div>
+              <div class="import-review__actions">
+                <button type="button" class="btn-secondary" id="btnCancelarImportacao">Cancelar</button>
+                <button type="button" class="btn-primary-sm" id="btnConfirmarImportacao">✓ Confirmar Importação</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -596,9 +702,15 @@
        4. contabilidade.js → DRE/Balancete/exportação PDF/anotação
           (usado por dashboards.js e categorias.js, por isso vem antes)
        5. Sub-módulos (usam globals definidos acima)
+       6. smart-input.js / regras-aprendidas.js / importacao-extrato.js
+          → reaproveitados sem alteração pelo modal "Lançamentos para
+          Cliente" (ver lancamentos-admin.js, que precisa vir por
+          ÚLTIMO — define os shims ClientModule/DatabaseModule/
+          UIModule que esses três arquivos esperam encontrar).
   ══════════════════════════════════════════════════════════════ -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js"></script>
   <script src="config.js"></script>
   <script src="admin.js"></script>
   <script src="contabilidade.js"></script>
@@ -608,6 +720,10 @@
   <script src="metas.js"></script>
   <script src="planejamentos.js"></script>
   <script src="razonete.js"></script>
+  <script src="smart-input.js"></script>
+  <script src="regras-aprendidas.js"></script>
+  <script src="importacao-extrato.js"></script>
+  <script src="lancamentos-admin.js"></script>
 
 </body>
 </html>

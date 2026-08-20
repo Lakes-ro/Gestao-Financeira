@@ -5,22 +5,45 @@
  *             loadAllClientes, openModal, closeModal,
  *             showToast, formatCurrency, formatDate (admin.js)
  *
- * CORREÇÃO DE SCHEMA (erro 400 confirmado no console do navegador):
- * - `planejamentos` não tem `cliente_id`, a coluna real é `client_id`.
- * - A ordenação usava `criado_em`, que também não existe; a coluna
- *   real é `created_at` (confirmado via database.js, que já ordena
- *   planejamentos por created_at com sucesso no lado do cliente).
+ * ═══════════════════════════════════════════════════════════════
+ * CORREÇÃO CRÍTICA — `planejamentos.admin_id` NÃO EXISTE:
+ * ═══════════════════════════════════════════════════════════════
+ * A versão anterior filtrava/gravava `planejamentos` usando uma
+ * coluna `admin_id` — confirmado ao vivo via Supabase MCP
+ * (information_schema): essa coluna NUNCA existiu na tabela. A tabela
+ * só tem `client_id`. Isso causava o erro 400 "column
+ * planejamentos.admin_id does not exist" reportado no console, que
+ * travava a aba inteira em "Carregando..." para sempre.
  *
- * MIGRAÇÃO DE SCHEMA (auditoria via Supabase MCP, confirmado ao vivo
- * no banco): o resumo financeiro usava join com `plano_de_contas`
- * para separar renda ativa de passiva — essa tabela nunca teve dados
- * visíveis pro admin sem `client_id`, e a tabela realmente usada
- * pelas categorias (`categorias`) não distingue renda ativa/passiva
- * (só existe o valor 'renda'). Por isso o resumo agora calcula renda
- * total diretamente de `transacoes` (sem precisar de join), e
- * "Renda Passiva" fica em R$ 0,00 até existir uma forma real de
- * marcar isso em `categorias`.
+ * A RLS de `planejamentos` (`planejamentos_admin_all`) também nunca
+ * checou uma coluna admin_id — ela sempre validou via JOIN:
+ *   EXISTS (SELECT 1 FROM clientes c WHERE c.id = planejamentos.client_id
+ *           AND c.admin_id = auth.uid())
+ * ou seja, o "dono" de um planejamento é definido por QUEM É O DONO DO
+ * CLIENTE (clientes.admin_id), nunca por uma coluna direta em
+ * planejamentos. A correção segue exatamente esse mesmo modelo usado
+ * por metas.js: carrega os clientes do admin primeiro, e filtra
+ * planejamentos por `client_id IN (clientIds)` — nunca por admin_id.
+ *
+ * ═══════════════════════════════════════════════════════════════
+ * NOVO — RESOLVER "SOLICITAÇÕES PENDENTES":
+ * ═══════════════════════════════════════════════════════════════
+ * O bloco "📩 Solicitações Pendentes" já existia no HTML (admin.html)
+ * mas nunca foi de fato implementado neste arquivo — ficava preso em
+ * "Carregando..." também. Agora:
+ *   - renderSolicitacoesPendentes() busca em `solicitacoes_planejamento`
+ *     (status = 'pendente') e mostra um card por cliente com a
+ *     mensagem que ele mandou (se houver).
+ *   - "📋 Criar Planejamento" abre o modal já com aquele cliente
+ *     pré-selecionado, e guarda o id da solicitação; ao salvar o
+ *     planejamento com sucesso, a solicitação é marcada como
+ *     'atendida' automaticamente.
+ *   - "✕ Descartar" marca a solicitação como 'atendida' sem criar
+ *     nenhum planejamento (ex: pedido duplicado, ou já resolvido por
+ *     fora).
  */
+
+let planejamentoSolicitacaoIdAtual = null; // solicitação sendo resolvida pelo modal aberto no momento (ou null)
 
 function initPlanejamentos() {
   document.getElementById('btn-add-planejamento')
@@ -33,13 +56,89 @@ function initPlanejamentos() {
     ?.addEventListener('change', (e) => carregarResumoFinanceiro(e.target.value));
 
   window.addEventListener('section:change', ({ detail }) => {
-    if (detail.section === 'planejamentos') renderPlanejamentos();
+    if (detail.section === 'planejamentos') {
+      renderSolicitacoesPendentes();
+      renderPlanejamentos();
+    }
   });
 
+  renderSolicitacoesPendentes();
   renderPlanejamentos();
 }
 
-// ── Renderiza lista ───────────────────────────────────────────
+// ── Solicitações Pendentes ──────────────────────────────────────
+async function renderSolicitacoesPendentes() {
+  const grid = document.getElementById('solicitacoes-planejamento-grid');
+  if (!grid) return;
+  grid.innerHTML = '<p class="empty-state">Carregando...</p>';
+
+  if (!allClientes.length) await loadAllClientes();
+
+  const { data, error } = await supabaseClient
+    .from('solicitacoes_planejamento')
+    .select('id, client_id, mensagem, status, created_at')
+    .eq('status', 'pendente')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    grid.innerHTML = `<p class="empty-state">Erro ao carregar: ${error.message}</p>`;
+    console.error('❌ renderSolicitacoesPendentes:', error.message);
+    return;
+  }
+
+  if (!data?.length) {
+    grid.innerHTML = '<p class="empty-state">Nenhuma solicitação pendente. 🎉</p>';
+    return;
+  }
+
+  grid.innerHTML = data.map(s => {
+    const cliente = allClientes.find(c => c.id === s.client_id);
+    return `
+      <div class="card card--pendente">
+        <div class="card-header-row">
+          <div>
+            <p class="card-name">${cliente?.nome || 'Cliente desconhecido'}</p>
+            <p class="card-sub">Solicitado em ${formatDate(s.created_at)}</p>
+            ${s.mensagem ? `<p class="card-sub" style="margin-top:6px; font-style:italic;">"${s.mensagem}"</p>` : ''}
+          </div>
+        </div>
+        <div class="card-actions">
+          <button class="btn-card confirmar btn-atender-solicitacao" data-id="${s.id}" data-client-id="${s.client_id}">📋 Criar Planejamento</button>
+          <button class="btn-card deletar btn-descartar-solicitacao" data-id="${s.id}">✕ Descartar</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  grid.querySelectorAll('.btn-atender-solicitacao').forEach(btn => {
+    btn.addEventListener('click', () => {
+      abrirModalPlanejamento(null, {
+        clientIdPreSelecionado: btn.dataset.clientId,
+        solicitacaoId: btn.dataset.id
+      });
+    });
+  });
+
+  grid.querySelectorAll('.btn-descartar-solicitacao').forEach(btn => {
+    btn.addEventListener('click', () => descartarSolicitacao(btn.dataset.id));
+  });
+}
+
+async function descartarSolicitacao(id) {
+  if (!confirm('Descartar esta solicitação sem criar um planejamento?')) return;
+
+  const { error } = await supabaseClient
+    .from('solicitacoes_planejamento')
+    .update({ status: 'atendida' })
+    .eq('id', id);
+
+  if (error) { showToast('Erro: ' + error.message, 'error'); return; }
+
+  showToast('Solicitação descartada.');
+  renderSolicitacoesPendentes();
+}
+
+// ── Renderiza lista de planejamentos ────────────────────────────
 async function renderPlanejamentos() {
   const lista = document.getElementById('planejamentos-list');
   if (!lista) return;
@@ -47,10 +146,18 @@ async function renderPlanejamentos() {
 
   if (!allClientes.length) await loadAllClientes();
 
+  const clienteIds = allClientes.map(c => c.id);
+  if (!clienteIds.length) {
+    lista.innerHTML = '<p class="empty-state">Nenhum cliente cadastrado ainda.</p>';
+    return;
+  }
+
+  // client_id IN (clientIds) — NUNCA filtrar por admin_id (não existe
+  // nesta tabela, ver nota no cabeçalho do arquivo).
   const { data, error } = await supabaseClient
     .from('planejamentos')
     .select('id, titulo, recomendacoes, detalhes, client_id, created_at')
-    .eq('admin_id', currentAdmin.id)
+    .in('client_id', clienteIds)
     .order('created_at', { ascending: false });
 
   if (error) { showToast('Erro ao carregar: ' + error.message, 'error'); return; }
@@ -78,7 +185,8 @@ async function renderPlanejamentos() {
 
   lista.querySelectorAll('.btn-card.editar').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const { data: p } = await supabaseClient.from('planejamentos').select('*').eq('id', btn.dataset.id).single();
+      const { data: p, error: err } = await supabaseClient.from('planejamentos').select('*').eq('id', btn.dataset.id).single();
+      if (err) { showToast('Erro ao carregar: ' + err.message, 'error'); return; }
       if (p) abrirModalPlanejamento(p);
     });
   });
@@ -89,8 +197,16 @@ async function renderPlanejamentos() {
 }
 
 // ── Modal planejamento ────────────────────────────────────────
-async function abrirModalPlanejamento(plan) {
+/**
+ * @param {Object|null} plan - planejamento existente (edição) ou null (novo)
+ * @param {Object} [opts]
+ * @param {string} [opts.clientIdPreSelecionado] - cliente já escolhido (vindo de uma solicitação)
+ * @param {string} [opts.solicitacaoId] - id da solicitação sendo resolvida por este planejamento
+ */
+async function abrirModalPlanejamento(plan, opts = {}) {
   if (!allClientes.length) await loadAllClientes();
+
+  planejamentoSolicitacaoIdAtual = opts.solicitacaoId || null;
 
   document.getElementById('modal-planejamento-title').textContent =
     plan ? '✏️ Editar Planejamento' : '📋 Criar Planejamento';
@@ -101,12 +217,13 @@ async function abrirModalPlanejamento(plan) {
   document.getElementById('planejamento-detalhes').value      = plan?.detalhes      || '';
 
   const select = document.getElementById('planejamento-cliente-select');
+  const clienteAlvo = plan?.client_id || opts.clientIdPreSelecionado;
   select.innerHTML = allClientes.map(c =>
-    `<option value="${c.id}" ${plan?.client_id === c.id ? 'selected' : ''}>${c.nome}</option>`
+    `<option value="${c.id}" ${clienteAlvo === c.id ? 'selected' : ''}>${c.nome}</option>`
   ).join('');
 
   resetResumo();
-  const clienteId = plan?.client_id || allClientes[0]?.id;
+  const clienteId = clienteAlvo || allClientes[0]?.id;
   if (clienteId) carregarResumoFinanceiro(clienteId);
 
   openModal('modal-planejamento');
@@ -132,8 +249,6 @@ async function carregarResumoFinanceiro(clienteId) {
   const receitas = transacoes.filter(t => t.tipo === 'receita');
   const despesas = transacoes.filter(t => t.tipo === 'despesa');
 
-  // 'categorias' não distingue renda ativa de passiva hoje — toda
-  // receita entra como ativa. Ver nota no cabeçalho do arquivo.
   const totalReceita = receitas.reduce((s, t) => s + Math.abs(t.valor), 0);
   const totalDespesa = despesas.reduce((s, t) => s + Math.abs(t.valor), 0);
   const rendaPassiva = 0;
@@ -163,13 +278,17 @@ async function salvarPlanejamento() {
   if (!titulo)    { showToast('Informe o título.', 'error');     return; }
   if (!clienteId) { showToast('Selecione um cliente.', 'error'); return; }
 
+  // client_id apenas — NUNCA admin_id (coluna não existe nesta
+  // tabela, ver nota no cabeçalho do arquivo).
   const payload = {
     titulo,
     recomendacoes: recomendacoes || null,
     detalhes:      detalhes      || null,
     client_id:     clienteId,
-    admin_id:      currentAdmin.id,
   };
+
+  const btn = document.getElementById('btn-salvar-planejamento');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
 
   let error;
   if (id) {
@@ -178,11 +297,30 @@ async function salvarPlanejamento() {
     ({ error } = await supabaseClient.from('planejamentos').insert(payload));
   }
 
-  if (error) { showToast('Erro: ' + error.message, 'error'); return; }
+  if (error) {
+    showToast('Erro: ' + error.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Salvar'; }
+    return;
+  }
+
+  // Se este planejamento resolveu uma solicitação pendente do
+  // cliente, marca a solicitação como atendida — evita o admin ter
+  // que lembrar de ir descartar manualmente depois de já ter criado
+  // o planejamento correspondente.
+  if (planejamentoSolicitacaoIdAtual) {
+    await supabaseClient
+      .from('solicitacoes_planejamento')
+      .update({ status: 'atendida' })
+      .eq('id', planejamentoSolicitacaoIdAtual);
+    planejamentoSolicitacaoIdAtual = null;
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Salvar'; }
 
   showToast(id ? 'Planejamento atualizado!' : 'Planejamento criado!');
   closeModal('modal-planejamento');
   renderPlanejamentos();
+  renderSolicitacoesPendentes();
 }
 
 async function deletarPlanejamento(id, titulo) {

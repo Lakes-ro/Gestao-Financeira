@@ -2,14 +2,21 @@
  * UI.JS — UTILITÁRIOS DE INTERFACE
  * ================================================
  * Padrão: script global (IIFE). Sem import/export.
+ *
+ * ATUALIZAÇÃO — FORMATCURRENCY (padrão brasileiro):
+ * Vários pontos do painel do cliente (dashboard.js, transactions.js,
+ * goals.js, app.js) formatavam valores manualmente com
+ * `R$ ${valor.toFixed(2)}`, o que produz "R$ 2303.00" em vez do
+ * padrão brasileiro "R$ 2.303,00" (separador de milhar com ponto,
+ * decimal com vírgula). `UIModule.formatCurrency()` centraliza isso
+ * usando `toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })`
+ * — o mesmo mecanismo que `formatCurrency()` do admin.js já usa
+ * corretamente do lado do administrador. Todos os pontos do painel do
+ * cliente que exibem dinheiro foram migrados para chamar esta função.
  */
 
 const UIModule = (() => {
     return {
-        /**
-         * Exibe a tela correta e revela o body (anti-flicker).
-         * Todas as telas ficam com visibility:hidden até esta chamada.
-         */
         showScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => {
                 s.classList.remove('active');
@@ -20,7 +27,6 @@ const UIModule = (() => {
                 screen.classList.add('active');
             }
 
-            // Revela o body agora que a tela correta está ativa
             document.body.classList.add('app-ready');
         },
 
@@ -126,12 +132,22 @@ const UIModule = (() => {
         hideLoading(elementId) {
             const el = document.getElementById(elementId);
             if (el) el.innerHTML = '';
+        },
+
+        /**
+         * Formata um valor numérico no padrão monetário brasileiro:
+         * separador de milhar "." e decimal ",", com o símbolo "R$"
+         * (ex: 150132456 -> "R$ 150.132.456,00"). Usar SEMPRE esta
+         * função em vez de `R$ ${valor.toFixed(2)}` em qualquer lugar
+         * que exiba dinheiro no painel do cliente.
+         */
+        formatCurrency(valor) {
+            const n = parseFloat(valor) || 0;
+            return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
         }
     };
 })();
 
-// Fallback: se o JS falhar e nunca chamar showScreen(),
-// revela o body após 2s para não deixar a tela em branco.
 setTimeout(() => document.body.classList.add('app-ready'), 2000);
 
 console.log('✅ ui.js carregado');

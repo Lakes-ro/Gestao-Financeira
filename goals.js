@@ -1,13 +1,18 @@
 /**
  * GOALS.JS - LÓGICA DE METAS
  * ================================================
+ * ATUALIZAÇÃO — MOEDA NO PADRÃO BRASILEIRO:
+ * formatGoal() usava `R$ ${valor.toFixed(2)}` — trocado por
+ * `UIModule.formatCurrency()`.
  */
 
 const GoalsModule = (() => {
     let allGoals = [];
 
     const formatGoal = (goal) => {
-        const progress = (goal.valor_economizado / goal.valor_necessario) * 100;
+        const necessario   = parseFloat(goal.valor_necessario || 0);
+        const economizado  = parseFloat(goal.valor_economizado || 0);
+        const progress      = necessario > 0 ? (economizado / necessario) * 100 : 0;
         const progressColor = progress >= 100 ? '#64ff7a' : progress >= 50 ? '#ffd700' : '#6495ff';
 
         return `
@@ -19,16 +24,16 @@ const GoalsModule = (() => {
                     </div>
                 </div>
                 <div class="meta-progress-bar">
-                    <div class="meta-progress-fill" style="width: ${progress}%; background: ${progressColor};"></div>
+                    <div class="meta-progress-fill" style="width: ${Math.min(progress, 100)}%; background: ${progressColor};"></div>
                 </div>
                 <div class="meta-info">
                     <div class="meta-info-item">
                         <div class="meta-info-label">Economizado</div>
-                        <div class="meta-info-value">R$ ${parseFloat(goal.valor_economizado || 0).toFixed(2)}</div>
+                        <div class="meta-info-value">${UIModule.formatCurrency(economizado)}</div>
                     </div>
                     <div class="meta-info-item">
                         <div class="meta-info-label">Necessário</div>
-                        <div class="meta-info-value">R$ ${parseFloat(goal.valor_necessario || 0).toFixed(2)}</div>
+                        <div class="meta-info-value">${UIModule.formatCurrency(necessario)}</div>
                     </div>
                     <div class="meta-info-item">
                         <div class="meta-info-label">Progresso</div>
