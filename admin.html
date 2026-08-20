@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gestor Financeiro Pro — Admin</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body class="app-body">
+
+  <!-- ══ SIDEBAR ══════════════════════════════════════════════ -->
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand-name">MentorFin</span>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-section="clientes">
+          <span class="nav-icon">📋</span> Clientes
+        </button>
+        <button class="nav-item" data-section="categorias">
+          <span class="nav-icon">🗂️</span> Categorias
+        </button>
+        <button class="nav-item" data-section="dashboards">
+          <span class="nav-icon">📊</span> Dashboards
+        </button>
+        <button class="nav-item" data-section="metas">
+          <span class="nav-icon">🎯</span> Metas
+        </button>
+        <button class="nav-item" data-section="planejamentos">
+          <span class="nav-icon">📋</span> Planejamentos
+        </button>
+        <button class="nav-item" data-section="razonete">
+          <span class="nav-icon">🧩</span> Razonete
+        </button>
+      </nav>
+    </div>
+
+    <div class="sidebar-bottom">
+      <button class="nav-item" data-section="perfil">
+        <span class="nav-icon">👤</span> Perfil
+      </button>
+      <button id="btn-sair" class="btn-sair">Sair</button>
+    </div>
+  </aside>
+
+  <!-- ══ CONTEÚDO PRINCIPAL ════════════════════════════════════ -->
+  <main class="main-content">
+
+    <header class="panel-header">
+      <div>
+        <h1 class="panel-title">👤 Painel do Administrador</h1>
+        <p class="panel-subtitle" id="admin-subtitle">Carregando...</p>
+      </div>
+    </header>
+
+    <!-- ── CLIENTES ─────────────────────────────────────────── -->
+    <section id="section-clientes" class="section active">
+      <div class="section-toolbar">
+        <h2 class="section-title">📋 Meus Clientes</h2>
+        <button class="btn-action" id="btn-add-cliente">+ Adicionar Cliente</button>
+      </div>
+      <div id="clientes-grid" class="cards-grid">
+        <p class="empty-state">Carregando clientes...</p>
+      </div>
+    </section>
+
+    <!-- ── CATEGORIAS (PLANO DE CONTAS) ─────────────────────── -->
+    <section id="section-categorias" class="section">
+      <div class="section-toolbar">
+        <h2 class="section-title">🗂️ Categorias — Plano de Contas</h2>
+        <button class="btn-action" id="btn-add-categoria">+ Adicionar Categoria</button>
+      </div>
+      <p class="panel-subtitle" style="margin-bottom:1rem;">
+        Estas são as categorias disponíveis para os clientes lançarem transações, organizadas por seção contábil
+        (1.x Receitas, 2.x Despesas Fixas, 3.x Investimentos, 4.x Estilo de Vida) — o mesmo agrupamento usado no
+        Balancete de cada cliente. Sem categorias aqui, o formulário de transação do cliente fica vazio.
+      </p>
+
+      <!-- Pendentes de Contabilização: categorias que os PRÓPRIOS
+           clientes criaram, aguardando o admin confirmar ou corrigir
+           o grupo do BI. Fica escondido quando não há nenhuma
+           pendente — ver renderPendentesRevisao() em categorias.js. -->
+      <div id="pendentes-revisao-bloco" class="hidden" style="margin-bottom:2rem;">
+        <div class="section-toolbar">
+          <h2 class="section-title">📥 Pendentes de Contabilização</h2>
+        </div>
+        <p class="panel-subtitle" style="margin-bottom:1rem;">
+          Categorias criadas pelos próprios clientes — confirme, ajuste o grupo, ou mescle numa categoria já
+          existente (ex: "Unha" → "Salão de Beleza e Estética") antes que elas contem no BI.
+        </p>
+        <div id="pendentes-revisao-grid" class="cards-grid"></div>
+      </div>
+
+      <div class="filter-group" style="margin-bottom:1.25rem; max-width:340px;">
+        <label>Buscar categoria</label>
+        <input type="text" id="categoria-busca" placeholder="Ex: Passagem, Transporte, Aluguel..."
+          style="width:100%; background:var(--bg-input); border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:0.55rem 0.85rem; color:var(--text-primary); font-family:var(--font-body); font-size:0.875rem; outline:none;">
+      </div>
+
+      <!-- A grade é renderizada por categorias.js AGRUPADA por seção
+           contábil (.plano-contas-secao), usando o codigo_contabil
+           REAL salvo no banco quando existe. -->
+      <div id="categorias-grid">
+        <p class="empty-state">Carregando...</p>
+      </div>
+    </section>
+
+    <!-- ── DASHBOARDS ───────────────────────────────────────── -->
+    <section id="section-dashboards" class="section">
+      <div class="section-toolbar">
+        <h2 class="section-title">📊 Dashboards dos Clientes</h2>
+      </div>
+      <div id="dashboards-grid" class="cards-grid">
+        <p class="empty-state">Carregando...</p>
+      </div>
+    </section>
+
+    <!-- ── METAS ────────────────────────────────────────────── -->
+    <section id="section-metas" class="section">
+      <div class="section-toolbar">
+        <h2 class="section-title">🎯 Metas dos Clientes</h2>
+        <button class="btn-action" id="btn-add-meta">+ Adicionar Meta</button>
+      </div>
+
+      <!-- Filtros: por cliente e por faixa de progresso — ver
+           metas.js (renderMetasFiltradas). -->
+      <div class="razonete-filters" style="margin-bottom:1.5rem;">
+        <div class="filter-group">
+          <label>Cliente:</label>
+          <select id="metas-filter-cliente">
+            <option value="">Todos os clientes</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Progresso:</label>
+          <select id="metas-filter-progresso">
+            <option value="">Todas</option>
+            <option value="zero">Sem progresso (0%)</option>
+            <option value="baixo">Baixo progresso (&lt; 25%)</option>
+            <option value="andamento">Em andamento (25% a 99%)</option>
+            <option value="concluida">Concluídas (100%+)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="metas-grid" class="cards-grid">
+        <p class="empty-state">Nenhuma meta cadastrada.</p>
+      </div>
+    </section>
+
+    <!-- ── PLANEJAMENTOS ────────────────────────────────────── -->
+    <section id="section-planejamentos" class="section">
+      <!-- Solicitações pendentes: pedidos que os próprios clientes
+           enviaram (botão "Solicitar Planejamento" no painel deles).
+           "Criar Planejamento" abre o modal já com o cliente certo
+           selecionado; "Descartar" marca como atendida sem criar nada. -->
+      <div class="section-toolbar">
+        <h2 class="section-title">📩 Solicitações Pendentes</h2>
+      </div>
+      <div id="solicitacoes-planejamento-grid" class="cards-grid" style="margin-bottom:2.5rem;">
+        <p class="empty-state">Carregando...</p>
+      </div>
+
+      <div class="section-toolbar">
+        <h2 class="section-title">📋 Planejamentos</h2>
+        <button class="btn-action" id="btn-add-planejamento">+ Criar Planejamento</button>
+      </div>
+      <div id="planejamentos-list" class="planejamentos-list">
+        <p class="empty-state">Nenhum planejamento criado.</p>
+      </div>
+    </section>
+
+    <!-- ── RAZONETE ─────────────────────────────────────────── -->
+    <section id="section-razonete" class="section">
+      <div class="section-toolbar">
+        <h2 class="section-title">🧩 Razonete Consolidado</h2>
+      </div>
+      <div class="razonete-periodo-pills">
+        <button type="button" class="razonete-periodo-pill" data-periodo="hoje">Hoje</button>
+        <button type="button" class="razonete-periodo-pill" data-periodo="ontem">Ontem</button>
+        <button type="button" class="razonete-periodo-pill" data-periodo="7dias">7 dias</button>
+        <button type="button" class="razonete-periodo-pill" data-periodo="mes">Este mês</button>
+        <button type="button" class="razonete-periodo-pill" data-periodo="mes_passado">Mês passado</button>
+        <button type="button" class="razonete-periodo-pill active" data-periodo="tudo">Tudo</button>
+        <button type="button" class="razonete-periodo-pill" data-periodo="personalizado">Personalizado...</button>
+      </div>
+
+      <!-- Período personalizado: só aparece quando o pill
+           "Personalizado" está ativo (ver razonete.js). -->
+      <div id="razonete-periodo-personalizado-row" class="razonete-filters hidden" style="margin-bottom:0.5rem;">
+        <div class="filter-group">
+          <label>De:</label>
+          <input type="date" id="razonete-data-inicio">
+        </div>
+        <div class="filter-group">
+          <label>Até:</label>
+          <input type="date" id="razonete-data-fim">
+        </div>
+      </div>
+
+      <div class="razonete-filters">
+        <div class="filter-group">
+          <label>Cliente:</label>
+          <select id="razonete-filter-cliente">
+            <option value="">Todos</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Tipo:</label>
+          <select id="razonete-filter-tipo">
+            <option value="">Todos</option>
+            <option value="receita">Receita</option>
+            <option value="despesa">Despesa</option>
+          </select>
+        </div>
+      </div>
+      <div id="razonete-list" class="razonete-list">
+        <p class="empty-state">Nenhuma transação encontrada.</p>
+      </div>
+    </section>
+
+    <!-- ── PERFIL ───────────────────────────────────────────── -->
+    <section id="section-perfil" class="section">
+      <div class="section-toolbar">
+        <h2 class="section-title">👤 Meu Perfil</h2>
+      </div>
+      <div class="perfil-card">
+        <div class="perfil-avatar">👤</div>
+        <div class="perfil-info">
+          <p class="perfil-nome"  id="perfil-nome">—</p>
+          <p class="perfil-email" id="perfil-email">—</p>
+          <span class="badge-role">Administrador</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══ MODAIS ════════════════════════════════════════════════ -->
+
+  <!-- Modal: Adicionar/Editar Cliente -->
+  <div id="modal-cliente" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-cliente-title">📋 Adicionar Cliente</h3>
+        <button class="modal-close" data-modal="modal-cliente">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="cliente-id" />
+        <div class="form-group">
+          <label>Nome completo</label>
+          <input type="text" id="cliente-nome" placeholder="Nome do cliente" />
+        </div>
+        <div class="form-group">
+          <label>E-mail (obrigatório)</label>
+          <input type="email" id="cliente-email" placeholder="email@exemplo.com" required />
+        </div>
+        <div class="form-group">
+          <label>CPF</label>
+          <input type="text" id="cliente-cpf" placeholder="000.000.000-00" maxlength="14" />
+        </div>
+        <div class="form-group">
+          <label>Telefone</label>
+          <input type="text" id="cliente-telefone" placeholder="(00) 00000-0000" maxlength="15" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-cliente">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-salvar-cliente">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Adicionar/Editar Categoria -->
+  <div id="modal-categoria" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-categoria-title">🏷️ Adicionar Categoria</h3>
+        <button class="modal-close" data-modal="modal-categoria">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="categoria-id" />
+        <div class="form-group">
+          <label>Nome da Categoria</label>
+          <input type="text" id="categoria-nome" placeholder="Ex: Supermercado" />
+        </div>
+        <div class="form-group">
+          <label>Tipo</label>
+          <select id="categoria-tipo">
+            <option value="receita">Receita</option>
+            <option value="despesa">Despesa</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Grupo</label>
+          <!-- Opções preenchidas dinamicamente por atualizarOpcoesDeGrupo()
+               em categorias.js, conforme o Tipo escolhido acima -->
+          <select id="categoria-grupo"></select>
+        </div>
+        <div class="form-group">
+          <label>Código Contábil (opcional)</label>
+          <input type="text" id="categoria-codigo-contabil" placeholder="Ex: 2.1.4 (Energia Elétrica)">
+          <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
+            Segue o plano de contas do modelo: 1.x Receitas, 2.x Despesas Fixas e Essenciais,
+            3.x Investimentos e Futuro, 4.x Estilo de Vida e Despesas Variáveis. Deixe em branco se a
+            categoria não se encaixa em nenhuma conta específica do modelo — ela continua funcionando
+            normalmente, só aparece com o código do GRUPO em vez do código da conta.
+          </p>
+        </div>
+        <div class="form-group">
+          <label>Palavras-chave / sinônimos (opcional)</label>
+          <textarea id="categoria-palavras-chave" rows="3" placeholder="Ex: aluguel ganho, aluguel recebido, recebimento de aluguel"></textarea>
+          <p class="panel-subtitle" style="margin-top:0.4rem; font-size:0.72rem;">
+            Separe por vírgula. Qualquer um desses termos, em qualquer ordem, dentro da descrição
+            que o cliente digitar, faz o sistema reconhecer esta categoria automaticamente — mesmo
+            que o classificador padrão não conheça a expressão. O sistema também já reconhece
+            variações parecidas do NOME da categoria automaticamente (ex: "cabelo" já encontra
+            "Cabeleireiro" mesmo sem nenhum sinônimo cadastrado aqui).
+          </p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-categoria">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-salvar-categoria">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Mesclar Categoria -->
+  <div id="modal-mesclar-categoria" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-mesclar-title">🔀 Mesclar Categoria</h3>
+        <button class="modal-close" data-modal="modal-mesclar-categoria">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="mesclar-origem-id" />
+        <p class="panel-subtitle" id="mesclar-origem-descricao" style="margin-bottom:0.5rem;"></p>
+        <div class="form-group">
+          <label>Categoria de destino</label>
+          <select id="mesclar-destino-select"></select>
+        </div>
+        <p class="panel-subtitle" style="margin-top:0.75rem; font-size:0.75rem; color: var(--accent-danger);">
+          ⚠️ Move todas as transações e regras aprendidas da categoria de origem para a categoria escolhida,
+          e DELETA a categoria de origem. Não pode ser desfeito.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-mesclar-categoria">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-confirmar-mesclagem" style="background: var(--accent-danger); color:#fff;">Mesclar e Deletar Origem</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Dashboard do Cliente (Resumo / DRE / Balancete) -->
+  <div id="modal-dashboard" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="modal-dashboard-title">📊 Dashboard</h3>
+        <button class="modal-close" data-modal="modal-dashboard">✕</button>
+      </div>
+      <div class="modal-body" id="modal-dashboard-body">
+
+        <!-- Abas — ver initModalDashboardTabs()/ativarAbaModalDashboard()
+             em dashboards.js -->
+        <div class="modal-dashboard__tabs">
+          <button type="button" class="modal-dashboard__tab active" data-tab="resumo">📊 Resumo</button>
+          <button type="button" class="modal-dashboard__tab" data-tab="dre">📄 DRE</button>
+          <button type="button" class="modal-dashboard__tab" data-tab="balancete">📋 Balancete</button>
+        </div>
+
+        <!-- ABA: RESUMO — conteúdo 100% original, só embrulhado na aba -->
+        <div class="modal-dashboard__tab-content active" id="tab-resumo">
+          <div class="kpi-grid">
+            <div class="kpi-card kpi-orange">
+              <span class="kpi-label">🟠 Custo de Sobrevivência</span>
+              <span class="kpi-value" id="kpi-sobrevivencia">R$ 0,00</span>
+            </div>
+            <div class="kpi-card kpi-yellow">
+              <span class="kpi-label">🎯 Estilo de Vida</span>
+              <span class="kpi-value" id="kpi-estilo">R$ 0,00</span>
+            </div>
+            <div class="kpi-card kpi-green">
+              <span class="kpi-label">💰 Investimentos</span>
+              <span class="kpi-value" id="kpi-investimentos">R$ 0,00</span>
+            </div>
+            <div class="kpi-card kpi-orange">
+              <span class="kpi-label">💳 Dívidas e Financiamentos</span>
+              <span class="kpi-value" id="kpi-dividas">R$ 0,00</span>
+            </div>
+            <div class="kpi-card kpi-blue">
+              <span class="kpi-label">📊 Taxa de Poupança</span>
+              <span class="kpi-value" id="kpi-poupanca">0%</span>
+            </div>
+          </div>
+          <div class="charts-row">
+            <div class="chart-card">
+              <h4>📊 Essencial vs. Estilo de Vida</h4>
+              <div class="chart-container"><canvas id="chart-donut"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h4>📊 Top Categorias de Despesa</h4>
+              <div class="chart-container"><canvas id="chart-bar"></canvas></div>
+            </div>
+          </div>
+          <div class="analise-section">
+            <h4>📊 ANÁLISE DETALHADA</h4>
+            <div class="analise-grid" id="analise-grid"></div>
+          </div>
+        </div>
+
+        <!-- ABA: DRE (Demonstração do Resultado) -->
+        <div class="modal-dashboard__tab-content" id="tab-dre">
+          <div class="dre-actions">
+            <button type="button" class="btn-secondary" id="btn-exportar-dre">🖨️ Exportar PDF</button>
+          </div>
+          <div id="dre-container">
+            <p class="empty-state">Abra o dashboard de um cliente para ver a DRE.</p>
+          </div>
+        </div>
+
+        <!-- ABA: BALANCETE DE VERIFICAÇÃO -->
+        <div class="modal-dashboard__tab-content" id="tab-balancete">
+          <div class="balancete-actions">
+            <button type="button" class="btn-secondary" id="btn-exportar-balancete">🖨️ Exportar PDF</button>
+            <button type="button" class="btn-primary-sm" id="btn-ampliar-balancete">🔍 Ampliar e Anotar</button>
+          </div>
+          <div id="balancete-container">
+            <p class="empty-state">Abra o dashboard de um cliente para ver o Balancete.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Balancete Ampliado — zoom + anotação livre (canvas) -->
+  <div id="modal-balancete-ampliado" class="modal-overlay hidden">
+    <div class="modal modal-ampliado">
+      <div class="modal-header">
+        <h3 id="balancete-ampliado-title">📋 Balancete Ampliado</h3>
+        <div class="modal-ampliado__header-actions">
+          <button type="button" class="btn-secondary" id="btn-exportar-balancete-ampliado">🖨️ Exportar PDF</button>
+          <button class="modal-close" data-modal="modal-balancete-ampliado">✕</button>
+        </div>
+      </div>
+
+      <div class="modal-ampliado__toolbar">
+        <div class="toolbar-group">
+          <button type="button" class="toolbar-btn active" data-ferramenta="caneta" title="Caneta">✏️</button>
+          <button type="button" class="toolbar-btn" data-ferramenta="texto" title="Adicionar texto">🔤</button>
+          <button type="button" class="toolbar-btn" data-ferramenta="borracha" title="Borracha">🧽</button>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label">Cor</label>
+          <input type="color" id="anotacao-cor" value="#ff4d6d">
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label">Espessura</label>
+          <input type="range" id="anotacao-espessura" min="1" max="12" value="3">
+        </div>
+        <div class="toolbar-group">
+          <button type="button" class="toolbar-btn" id="btn-desfazer-anotacao" title="Desfazer">↩️</button>
+          <button type="button" class="toolbar-btn" id="btn-limpar-anotacoes" title="Limpar tudo">🗑️</button>
+        </div>
+        <div class="toolbar-group toolbar-group--zoom">
+          <button type="button" class="toolbar-btn" id="btn-zoom-menos" title="Diminuir zoom">➖</button>
+          <span id="balanceteZoomLabel">100%</span>
+          <button type="button" class="toolbar-btn" id="btn-zoom-mais" title="Aumentar zoom">➕</button>
+          <button type="button" class="toolbar-btn" id="btn-zoom-reset" title="Restaurar zoom">↺</button>
+        </div>
+      </div>
+
+      <div class="modal-ampliado__content" id="balancete-ampliado-scroll">
+        <div class="modal-ampliado__canvas-wrapper" id="balancete-ampliado-wrapper">
+          <div id="balancete-ampliado-tabela"></div>
+          <canvas id="balancete-ampliado-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Adicionar/Editar Meta -->
+  <div id="modal-meta" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-meta-title">🎯 Adicionar Meta</h3>
+        <button class="modal-close" data-modal="modal-meta">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="meta-id" />
+        <div class="form-group">
+          <label>Cliente</label>
+          <select id="meta-cliente-select"></select>
+        </div>
+        <div class="form-group">
+          <label>Título da Meta</label>
+          <input type="text" id="meta-titulo" placeholder="Ex: Fundo de Emergência" />
+        </div>
+        <div class="form-group">
+          <label>Valor Necessário (R$)</label>
+          <input type="number" id="meta-valor" placeholder="0,00" min="0" step="0.01" />
+        </div>
+        <div class="form-group">
+          <label>Valor Economizado (R$)</label>
+          <input type="number" id="meta-economizado" placeholder="0,00" min="0" step="0.01" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-meta">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-salvar-meta">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Criar/Editar Planejamento -->
+  <div id="modal-planejamento" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-planejamento-title">📋 Criar Planejamento</h3>
+        <button class="modal-close" data-modal="modal-planejamento">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="planejamento-id" />
+        <div class="planejamento-summary">
+          <div class="summary-item">
+            <span class="summary-label">Renda Ativa</span>
+            <span class="summary-value green" id="plan-renda-ativa">R$ 0,00</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Renda Passiva</span>
+            <span class="summary-value green" id="plan-renda-passiva">R$ 0,00</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Renda Total</span>
+            <span class="summary-value green" id="plan-renda-total">R$ 0,00</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Despesa Total</span>
+            <span class="summary-value red" id="plan-despesa-total">R$ 0,00</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Cliente</label>
+          <select id="planejamento-cliente-select"></select>
+        </div>
+        <div class="form-group">
+          <label>Título do Planejamento</label>
+          <input type="text" id="planejamento-titulo" placeholder="Planejamento mensal" />
+        </div>
+        <div class="form-group">
+          <label>Recomendações</label>
+          <textarea id="planejamento-recomendacoes" rows="5" placeholder="Com base na sua renda..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Detalhes Adicionais</label>
+          <textarea id="planejamento-detalhes" rows="4" placeholder="Nenhuma"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-planejamento">Cancelar</button>
+        <button class="btn-primary-sm" id="btn-salvar-planejamento">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Comentários do Cliente -->
+  <div id="modal-comentarios" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-comentarios-title">💬 Comentários</h3>
+        <button class="modal-close" data-modal="modal-comentarios">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="comentarios-list" class="comentarios-list"></div>
+        <div class="form-group" style="margin-top:1rem;">
+          <label>Novo comentário</label>
+          <textarea id="novo-comentario" rows="3" placeholder="Escreva um comentário sobre o cliente..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-modal="modal-comentarios">Fechar</button>
+        <button class="btn-primary-sm" id="btn-salvar-comentario">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- ══ SCRIPTS — Ordem obrigatória, sem type="module" ════════
+       1. CDNs externos
+       2. config.js  → CONFIG + supabaseClient (globals)
+       3. admin.js   → currentAdmin, allClientes, helpers globais
+       4. contabilidade.js → DRE/Balancete/exportação PDF/anotação
+          (usado por dashboards.js e categorias.js, por isso vem antes)
+       5. Sub-módulos (usam globals definidos acima)
+  ══════════════════════════════════════════════════════════════ -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="config.js"></script>
+  <script src="admin.js"></script>
+  <script src="contabilidade.js"></script>
+  <script src="categorias.js"></script>
+  <script src="clientes.js"></script>
+  <script src="dashboards.js"></script>
+  <script src="metas.js"></script>
+  <script src="planejamentos.js"></script>
+  <script src="razonete.js"></script>
+
+</body>
+</html>

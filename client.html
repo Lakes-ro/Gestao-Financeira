@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor Financeiro Pro</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="stylesheet" href="style.css">
+    <!-- Anti-flicker: o body começa com visibility:hidden (via CSS).
+         Se o JS demorar mais de 2s, o ui.js revela automaticamente.
+         Garantia extra: nunca mostra sidebar antes do login. -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="app-container">
+
+    <!-- ============================================================
+         TELA: LOGIN ÚNICO
+    ============================================================ -->
+    <div id="loginScreen" class="screen screen--centered active">
+        <div class="login-box">
+            <h1 class="login-box__title">💰 Gestor Financeiro</h1>
+            <p class="login-box__subtitle">Plataforma de Inteligência Financeira</p>
+            <form onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="loginEmail" placeholder="seu@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Senha</label>
+                    <input type="password" id="loginPassword" placeholder="Digite sua senha" required>
+                </div>
+                <button type="submit" class="btn btn--primary">Entrar</button>
+            </form>
+            <div id="loginError" class="login-error hidden"></div>
+            <p class="login-box__toggle-text">
+                Não tem conta?
+                <a href="#" onclick="toggleScreen('registerScreen'); return false;">Criar conta</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         TELA: CADASTRO
+    ============================================================ -->
+    <div id="registerScreen" class="screen screen--centered">
+        <div class="login-box" style="max-width:460px;">
+            <h1 class="login-box__title">💰 Criar Conta</h1>
+            <p class="login-box__subtitle">Crie o seu acesso gratuito</p>
+            <form onsubmit="handleRegister(event)">
+                <div class="form-group">
+                    <label>Nome Completo</label>
+                    <input type="text" id="registerNome" placeholder="Ex: Vinícius Viana" required>
+                </div>
+                <div class="form-group">
+                    <label>Como quer ser chamado? (Apelido)</label>
+                    <input type="text" id="registerApelido" placeholder="Ex: Vini" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="registerEmail" placeholder="seu@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Senha</label>
+                    <input type="password" id="registerPassword" placeholder="Mínimo 6 caracteres" required>
+                </div>
+                <div class="form-group">
+                    <label>Confirmar Senha</label>
+                    <input type="password" id="registerPasswordConfirm" placeholder="Repita a senha" required>
+                </div>
+                <button type="submit" class="btn btn--primary">Criar Conta</button>
+                <div id="registerError" class="login-error hidden" style="margin-top:12px;"></div>
+            </form>
+            <p class="login-box__toggle-text">
+                Já tem conta?
+                <a href="#" onclick="toggleScreen('loginScreen'); return false;">Fazer login</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         TELA: ONBOARDING (primeiro acesso — fallback)
+    ============================================================ -->
+    <div id="onboardingScreen" class="screen screen--centered">
+        <div class="login-box" style="max-width:480px;">
+            <h1 class="login-box__title">👋 Bem-vindo!</h1>
+            <p class="login-box__subtitle">Só falta completar o teu perfil para começar</p>
+            <form onsubmit="handleOnboarding(event)">
+                <div class="form-group">
+                    <label>Nome Completo</label>
+                    <input type="text" id="onboardingNome" placeholder="Ex: Roger Hugo Santos" required>
+                </div>
+                <div class="form-group">
+                    <label>Como quer ser chamado? (Apelido)</label>
+                    <input type="text" id="onboardingApelido" placeholder="Ex: Roger" required>
+                </div>
+                <button type="submit" class="btn btn--primary" style="margin-top:8px;">Continuar →</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         TELA: PAINEL CLIENTE
+         (O painel do administrador vive exclusivamente em admin.html)
+    ============================================================ -->
+    <div id="clientScreen" class="screen layout-wrapper">
+        <aside class="sidebar">
+            <div class="sidebar__header">
+                <h2>📊 Menu</h2>
+            </div>
+            <nav class="sidebar__nav">
+                <button class="sidebar__nav-item active"
+                    onclick="switchClientView('cli-dashboard', event)">📈 Dashboard</button>
+                <button class="sidebar__nav-item"
+                    onclick="switchClientView('cli-transactions', event)">💳 Transações</button>
+                <button class="sidebar__nav-item"
+                    onclick="switchClientView('cli-goals', event)">🎯 Metas</button>
+                <button class="sidebar__nav-item"
+                    onclick="switchClientView('cli-planning', event)">📋 Planejamento</button>
+                <button class="sidebar__nav-item sidebar__nav-item--profile"
+                    onclick="showClientProfile()">👤 Perfil</button>
+            </nav>
+        </aside>
+
+        <main class="main-content">
+            <header class="client-header">
+                <h1>👋 Bem-vindo, <span id="clientNameDisplay"></span></h1>
+                <p>Organize a sua vida financeira de forma simples.</p>
+            </header>
+
+            <!-- DASHBOARD CLIENTE -->
+            <section id="cli-dashboard" class="view-section active">
+                <div class="card">
+                    <div class="card__header-row">
+                        <h3>📊 Resumo do Período</h3>
+                    </div>
+
+                    <!-- Filtro de período do Dashboard — mesma lógica do
+                         Histórico (Todos/Hoje/7 dias/Este mês/Mês
+                         passado/Personalizado). Ver app.js:
+                         initDashboardFilters()/getFiltroDashboardAtual(). -->
+                    <div class="history-filters dashboard-filters">
+                        <div class="form-group">
+                            <label>Período</label>
+                            <select id="dashPeriodoRapido">
+                                <option value="todos">Todos os lançamentos</option>
+                                <option value="hoje">Hoje</option>
+                                <option value="7dias">Últimos 7 dias</option>
+                                <option value="mes" selected>Este mês</option>
+                                <option value="mes_passado">Mês passado</option>
+                                <option value="personalizado">Personalizado</option>
+                            </select>
+                        </div>
+                        <div class="history-filters__custom-range hidden" id="dashPeriodoPersonalizadoRow">
+                            <div class="form-group">
+                                <label>De</label>
+                                <input type="date" id="dashDataInicio">
+                            </div>
+                            <div class="form-group">
+                                <label>Até</label>
+                                <input type="date" id="dashDataFim">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="resume-grid">
+                        <div class="resume-item receita">
+                            <span class="label">Receitas</span>
+                            <span class="value" id="totalReceitas">R$ 0,00</span>
+                        </div>
+                        <div class="resume-item despesa">
+                            <span class="label">Despesas</span>
+                            <span class="value" id="totalDespesas">R$ 0,00</span>
+                        </div>
+                        <div class="resume-item saldo">
+                            <span class="label">Saldo Disponível</span>
+                            <span class="value" id="saldo">R$ 0,00</span>
+                            <span class="bi-detail" id="saldoAlocadoDetalhe"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>🎯 Análise Financeira</h3>
+                    <div class="bi-grid">
+                        <div class="bi-item">
+                            <span class="bi-label">Custo de Sobrevivência</span>
+                            <span class="bi-value" id="biSurvivalCost">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Estilo de Vida</span>
+                            <span class="bi-value" id="biLifestyleCost">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Investimentos</span>
+                            <span class="bi-value" id="biInvestments">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Dívidas e Financiamentos</span>
+                            <span class="bi-value" id="biDebt">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Renda Passiva</span>
+                            <span class="bi-value" id="biPassiveIncome">R$ 0,00</span>
+                        </div>
+                        <div class="bi-item">
+                            <span class="bi-label">Índice de Cobertura</span>
+                            <span class="bi-value" id="biCoverage">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TRANSAÇÕES CLIENTE -->
+            <section id="cli-transactions" class="view-section">
+                <div class="card">
+                    <h3>➕ Registar Transação</h3>
+                    <form onsubmit="handleAddTransaction(event)">
+                        <div class="form-group">
+                            <label>Descrição (opcional)</label>
+                            <input type="text" id="transDescription" placeholder="Ex: Supermercado Extra, Uber pro trabalho, Salário...">
+                        </div>
+                        <div class="form-group">
+                            <label>Categoria</label>
+                            <div class="custom-select" id="transCategoryWrapper">
+                                <button type="button" class="custom-select__trigger" id="transCategoryTrigger" disabled>
+                                    <span id="transCategoryTriggerText">Carregando categorias...</span>
+                                    <span class="custom-select__chevron">▾</span>
+                                </button>
+                                <div class="custom-select__panel hidden" id="transCategoryPanel"></div>
+                                <input type="hidden" id="transCategory">
+                            </div>
+                            <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()">+ Criar categoria personalizada</button>
+                        </div>
+                        <div class="form-group hidden" id="transMetaWrapper">
+                            <label>🎯 Vincular a uma Meta (opcional)</label>
+                            <select id="transMeta">
+                                <option value="">Não vincular a nenhuma meta</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Valor (R$)</label>
+                                <input type="number" id="transValue" placeholder="0,00" step="0.01" min="0.01" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Data</label>
+                                <input type="date" id="transDate" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn--primary">Registar</button>
+                    </form>
+                </div>
+
+                <!-- ============================================================
+                     IMPORTAÇÃO DE EXTRATO (OFX/CSV)
+                ============================================================ -->
+                <div class="card">
+                    <h3>📥 Importar Extrato (OFX/CSV)</h3>
+                    <p style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">
+                        Envie um arquivo .ofx ou .csv do seu banco. O sistema tenta classificar cada lançamento
+                        automaticamente — você revisa e corrige antes de qualquer coisa ser salva.
+                    </p>
+                    <div class="form-group">
+                        <label>Arquivo (.ofx ou .csv)</label>
+                        <input type="file" id="importFileInput" accept=".ofx,.csv,text/csv,application/vnd.intu.qbo">
+                    </div>
+                    <button type="button" class="btn btn--secondary" id="btnProcessarImportacao">Processar Arquivo</button>
+
+                    <div id="importResumoStatus" class="import-status hidden"></div>
+
+                    <div id="importReviewContainer" class="import-review hidden">
+                        <div class="import-review__header">
+                            <h4>Revise antes de importar</h4>
+                            <label class="import-review__select-all">
+                                <input type="checkbox" id="importSelecionarTodas" checked>
+                                Selecionar todas
+                            </label>
+                        </div>
+                        <div class="import-review__table-wrapper">
+                            <table class="import-review__table" id="importReviewTable">
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>Data</th>
+                                        <th>Descrição</th>
+                                        <th>Valor</th>
+                                        <th>Tipo</th>
+                                        <th>Categoria</th>
+                                        <th>Origem</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="importReviewTableBody"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()" style="margin:14px 0 4px;">+ Criar categoria personalizada</button>
+                        <div class="import-review__actions">
+                            <button type="button" class="btn--secondary btn" id="btnCancelarImportacao">Cancelar</button>
+                            <button type="button" class="btn btn--primary" id="btnConfirmarImportacao">✓ Confirmar Importação</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HISTÓRICO — agora recolhível: o cabeçalho é um botão
+                     (.btn-collapse) que abre/fecha #historicoConteudo
+                     (filtros + lista) via toggleHistoricoCard() (app.js). -->
+                <div class="card">
+                    <button type="button" class="btn-collapse" onclick="toggleHistoricoCard()">
+                        <span>📋 Histórico</span>
+                        <span class="collapse-icon" id="historicoCollapseIcon">▾</span>
+                    </button>
+
+                    <div id="historicoConteudo">
+                        <div class="history-filters" style="margin-top:16px;">
+                            <div class="form-group">
+                                <label>Período</label>
+                                <select id="histPeriodoRapido">
+                                    <option value="todos">Todos os lançamentos</option>
+                                    <option value="hoje">Hoje</option>
+                                    <option value="7dias">Últimos 7 dias</option>
+                                    <option value="mes">Este mês</option>
+                                    <option value="mes_passado">Mês passado</option>
+                                    <option value="personalizado">Personalizado</option>
+                                </select>
+                            </div>
+                            <div class="history-filters__custom-range hidden" id="histPeriodoPersonalizadoRow">
+                                <div class="form-group">
+                                    <label>De</label>
+                                    <input type="date" id="histDataInicio">
+                                </div>
+                                <div class="form-group">
+                                    <label>Até</label>
+                                    <input type="date" id="histDataFim">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Tipo</label>
+                                <select id="histFiltroTipo">
+                                    <option value="">Todos</option>
+                                    <option value="receita">Receitas</option>
+                                    <option value="despesa">Despesas</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="transactionHistoryList" class="transactions-list">
+                            <p class="empty-state">Nenhuma transação registada</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- METAS CLIENTE -->
+            <section id="cli-goals" class="view-section">
+                <div class="card">
+                    <h3>🎯 Minhas Metas</h3>
+                    <button onclick="toggleAddMetaForm()" class="btn btn--secondary" style="margin-bottom: 15px;">
+                        + Adicionar Meta
+                    </button>
+
+                    <div id="addMetaForm" class="hidden" style="padding: 20px; background: rgba(100, 150, 255, 0.08); border-radius: 10px; margin-bottom: 15px; border: 1px solid rgba(100, 150, 255, 0.2);">
+                        <form onsubmit="handleAddMeta(event)">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Nome da Meta</label>
+                                    <input type="text" id="metaName" placeholder="Ex: Fundo de Emergência" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Valor Necessário (R$)</label>
+                                    <input type="number" id="metaValue" placeholder="0,00" step="0.01" min="0" required>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn--primary">Criar Meta</button>
+                        </form>
+                    </div>
+
+                    <div id="clientMetasList" class="metas-client-grid">
+                        <p class="empty-state">Nenhuma meta criada</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- PLANEJAMENTO CLIENTE -->
+            <section id="cli-planning" class="view-section">
+                <div class="card">
+                    <h3>📊 Planejamento Personalizado</h3>
+                    <div id="clientPlanningRequestArea"></div>
+                    <div id="clientPlanningList">
+                        <p class="empty-state">Aguardando planejamento do administrador...</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+</div><!-- /.app-container -->
+
+<!-- ============================================================
+     MODAL: NOVA CATEGORIA PERSONALIZADA
+============================================================ -->
+<div id="modalNovaCategoria" class="modal hidden">
+    <div class="modal__content" style="max-width:440px;">
+        <header class="modal__header">
+            <h2>🏷️ Nova Categoria</h2>
+            <button onclick="closeModal('modalNovaCategoria')" class="modal__close-btn">✕</button>
+        </header>
+        <div class="modal__body">
+            <div class="form-group">
+                <label>Nome da categoria</label>
+                <input type="text" id="novaCategoriaNome" placeholder="Ex: Uber, Freelance Design...">
+            </div>
+            <div class="form-group">
+                <label>É uma receita ou despesa?</label>
+                <select id="novaCategoriaTipo">
+                    <option value="receita">Receita (dinheiro que entra)</option>
+                    <option value="despesa">Despesa (dinheiro que sai)</option>
+                </select>
+            </div>
+            <div id="novaCategoriaSugestao" class="categoria-sugestao-ia hidden"></div>
+            <button type="button" onclick="handleClassificarNovaCategoria()" id="btnClassificarCategoria" class="btn btn--secondary" style="width:100%; margin-top:6px;">Analisar categoria</button>
+            <button type="button" onclick="handleConfirmarNovaCategoria()" id="btnConfirmarCategoria" class="btn btn--primary hidden" style="width:100%; margin-top:10px;">✓ Confirmar e Salvar</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODAL: PERFIL CLIENTE
+============================================================ -->
+<div id="clientProfileModal" class="modal hidden">
+    <div class="modal__content">
+        <header class="modal__header">
+            <h2>👤 Meu Perfil</h2>
+            <button onclick="closeModal('clientProfileModal')" class="modal__close-btn">✕</button>
+        </header>
+        <div class="modal__body">
+            <div style="background: rgba(100, 150, 255, 0.1); padding: 20px; border-radius: 8px;">
+                <p style="color:#a0a0b0; font-size:12px; margin-bottom:6px;">Nome</p>
+                <p id="profileClientName" style="color:#fff; font-size:18px; font-weight:700;"></p>
+                <p style="color:#a0a0b0; font-size:12px; margin:15px 0 6px;">Email</p>
+                <p id="profileClientEmail" style="color:#6495ff; font-size:14px;"></p>
+            </div>
+            <button onclick="handleLogout()" class="btn btn--logout" style="width:100%; margin-top:20px;">🚪 Sair da conta</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODAL: SOLICITAR PLANEJAMENTO
+============================================================ -->
+<div id="modalSolicitarPlanejamento" class="modal hidden">
+    <div class="modal__content" style="max-width:440px;">
+        <header class="modal__header">
+            <h2>📩 Solicitar Planejamento</h2>
+            <button onclick="closeModal('modalSolicitarPlanejamento')" class="modal__close-btn">✕</button>
+        </header>
+        <div class="modal__body">
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                O administrador vai receber um aviso e criar um planejamento personalizado pra você.
+            </p>
+            <div class="form-group">
+                <label>Quer contar alguma coisa específica? (opcional)</label>
+                <textarea id="solicitarPlanejamentoMensagem" rows="4" placeholder="Ex: Quero focar em juntar dinheiro para uma viagem no fim do ano..."></textarea>
+            </div>
+            <button type="button" onclick="handleEnviarSolicitacaoPlanejamento()" id="btnEnviarSolicitacaoPlanejamento" class="btn btn--primary" style="width:100%;">Enviar Solicitação</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODAL: EDITAR TRANSAÇÃO
+============================================================ -->
+<div id="editTransactionModal" class="modal hidden">
+    <div class="modal__content" style="max-width:460px;">
+        <header class="modal__header">
+            <h2>✏️ Editar Transação</h2>
+            <button onclick="fecharModalEdicaoTransacao()" class="modal__close-btn">✕</button>
+        </header>
+        <div class="modal__body">
+            <input type="hidden" id="editTransId">
+            <div class="form-group">
+                <label>Descrição</label>
+                <input type="text" id="editTransDescription" placeholder="Ex: Supermercado Extra">
+            </div>
+            <div class="form-group">
+                <label>Categoria</label>
+                <div class="custom-select" id="editTransCategoryWrapper">
+                    <button type="button" class="custom-select__trigger" id="editTransCategoryTrigger">
+                        <span id="editTransCategoryTriggerText">Selecione uma categoria</span>
+                        <span class="custom-select__chevron">▾</span>
+                    </button>
+                    <div class="custom-select__panel hidden" id="editTransCategoryPanel"></div>
+                    <input type="hidden" id="editTransCategory">
+                </div>
+            </div>
+            <div class="form-group hidden" id="editTransMetaWrapper">
+                <label>🎯 Vincular a uma Meta (opcional)</label>
+                <select id="editTransMeta">
+                    <option value="">Não vincular a nenhuma meta</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Valor (R$)</label>
+                    <input type="number" id="editTransValue" step="0.01" min="0.01">
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="date" id="editTransDate">
+                </div>
+            </div>
+            <button type="button" onclick="handleSalvarEdicaoTransacao()" id="btnSalvarEdicaoTransacao" class="btn btn--primary" style="width:100%;">Salvar Alterações</button>
+            <button type="button" onclick="handleDeletarTransacao()" class="btn btn--logout" style="width:100%; margin-top:10px;">🗑️ Excluir Transação</button>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     SCRIPTS — ORDEM CRÍTICA
+============================================================ -->
+<script src="config.js"></script>
+<script src="ui.js"></script>
+<script src="auth.js"></script>
+<script src="database.js"></script>
+<script src="dashboard.js"></script>
+<script src="transactions.js"></script>
+<script src="goals.js"></script>
+<script src="planning.js"></script>
+<script src="client.js"></script>
+<script src="app.js"></script>
+<script src="smart-input.js"></script>
+<script src="regras-aprendidas.js"></script>
+<script src="importacao-extrato.js"></script>
+<script src="categoria-personalizada.js"></script>
+
+</body>
+</html>
