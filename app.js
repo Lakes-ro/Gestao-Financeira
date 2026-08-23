@@ -116,6 +116,11 @@ async function routeByRole(user, role) {
     await populateCategorySelect();
     UIModule.showScreen('clientScreen');
     await loadClientDashboard();
+
+    // Inicializa lembretes in-app e Web Push após o dashboard carregar
+    if (typeof NotificacoesModule !== 'undefined') {
+        NotificacoesModule.inicializar(user.id).catch(() => {});
+    }
 }
 
 async function garantirClienteExiste(user) {
@@ -347,6 +352,11 @@ async function handleOnboarding(event) {
         await populateCategorySelect();
         UIModule.showScreen('clientScreen');
         await loadClientDashboard();
+
+        // Inicializa notificações também no primeiro acesso (onboarding)
+        if (typeof NotificacoesModule !== 'undefined') {
+            NotificacoesModule.inicializar(user.id).catch(() => {});
+        }
     } catch (error) {
         console.error('❌ Erro em handleOnboarding:', error);
         UIModule.showError(error.message || 'Erro ao salvar perfil');

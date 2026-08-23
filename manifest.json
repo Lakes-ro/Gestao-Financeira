@@ -1,0 +1,26 @@
+{
+    "name": "MentorFin",
+    "short_name": "MentorFin",
+    "description": "Organize a sua vida financeira de forma simples",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait-primary",
+    "background_color": "#0f0f1e",
+    "theme_color": "#6495ff",
+    "lang": "pt-BR",
+    "icons": [
+        {
+            "src": "logo.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "logo.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}
