@@ -2,8 +2,8 @@
  * CLIENTES.JS — Módulo: Clientes (admin.html)
  * Padrão: script global. Sem import/export.
  * Depende de: supabaseClient, currentAdmin, allClientes,
- *             loadAllClientes, openModal, closeModal, showToast
- *             (admin.js).
+ *             loadAllClientes, openModal, closeModal, showToast,
+ *             renderIdentidadeCliente (admin.js).
  *
  * ATUALIZAÇÃO — BOTÃO "📥 Lançamentos" EM CADA CARD:
  * Abre o modal "Lançamentos para Cliente" (ver admin.html +
@@ -11,10 +11,33 @@
  * admin pode lançar uma transação manualmente ou importar um extrato
  * (OFX/CSV) que o cliente mandou, reaproveitando toda a inteligência
  * de classificação automática já usada no painel do próprio cliente.
+ *
+ * ATUALIZAÇÃO — PRIVACIDADE (OLHINHO): o card de cada cliente agora
+ * usa renderIdentidadeCliente() (admin.js) em vez de mostrar nome/
+ * email direto — nome e email ficam mascarados por padrão, com um
+ * botão de olho pra revelar.
+ *
+ * ATUALIZAÇÃO — EDIÇÃO/EXCLUSÃO DE COMENTÁRIOS: antes só dava pra
+ * ADICIONAR um comentário — não tinha como corrigir um erro de
+ * digitação nem apagar um comentário antigo/errado. Agora cada
+ * comentário tem botões ✏️ (editar) e 🗑️ (excluir):
+ *   - ✏️ Editar: preenche o textarea com o texto atual e troca o
+ *     botão "Enviar" para "✓ Salvar Edição" — ao salvar, faz UPDATE
+ *     em vez de INSERT. Um aviso aparece acima do textarea, com link
+ *     para cancelar a edição a qualquer momento.
+ *   - 🗑️ Excluir: pede confirmação e apaga a linha.
+ * `comentarioEmEdicaoId` guarda qual comentário está sendo editado
+ * (null = modo "novo comentário", padrão).
+ *
+ * ⚠️ Se der erro 403 ao editar/excluir um comentário, é porque a
+ * policy RLS de `comentarios_clientes` só permite INSERT/SELECT —
+ * será necessário adicionar policies de UPDATE/DELETE para o admin
+ * (admin_id = auth.uid()) via Supabase.
  */
 
-let clienteEmEdicao     = null;
-let clienteComentarioId = null;
+let clienteEmEdicao      = null;
+let clienteComentarioId  = null;
+let comentarioEmEdicaoId = null; // id do comentário em edição, ou null
 
 function initClientes() {
   document.getElementById('btn-add-cliente')
@@ -62,10 +85,7 @@ async function renderClientes() {
 
   grid.innerHTML = allClientes.map(c => `
     <div class="card">
-      <div>
-        <p class="card-name">${c.nome}</p>
-        <p class="card-sub">${c.email || 'Sem email'}</p>
-      </div>
+      ${renderIdentidadeCliente(c.nome, c.email)}
       <div class="card-actions">
         <button class="btn-card editar" data-id="${c.id}">✏️ Editar</button>
         <button class="btn-card comentarios" data-id="${c.id}" data-nome="${c.nome}">💬 Comentários</button>
@@ -194,13 +214,25 @@ async function confirmarDeletar(id, nome) {
   renderClientes();
 }
 
+// ══════════════════════════════════════════════════════════════
+// COMENTÁRIOS — LISTAR, ADICIONAR, EDITAR, EXCLUIR
+// ══════════════════════════════════════════════════════════════
+
 async function abrirModalComentarios(clienteId, nome) {
   clienteComentarioId = clienteId;
+  cancelarEdicaoComentario(); // garante que o modal sempre abre em modo "novo comentário"
+
   document.getElementById('modal-comentarios-title').textContent = `💬 Comentários — ${nome}`;
-  document.getElementById('novo-comentario').value = '';
 
   await carregarComentarios(clienteId);
   openModal('modal-comentarios');
+}
+
+function escaparHtmlComentario(texto) {
+  return (texto || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 async function carregarComentarios(clienteId) {
@@ -209,37 +241,119 @@ async function carregarComentarios(clienteId) {
 
   const { data, error } = await supabaseClient
     .from('comentarios_clientes')
-    .select('texto, created_at')
+    .select('id, texto, created_at')
     .eq('client_id', clienteId)
     .order('created_at', { ascending: false });
 
-  if (error || !data?.length) {
+  if (error) {
+    lista.innerHTML = `<p class="empty-state">Erro ao carregar comentários: ${error.message}</p>`;
+    console.error('❌ carregarComentarios:', error.message);
+    return;
+  }
+
+  if (!data?.length) {
     lista.innerHTML = '<p class="empty-state">Nenhum comentário ainda.</p>';
     return;
   }
 
   lista.innerHTML = data.map(c => `
-    <div class="comentario-item">
-      <p class="comentario-data">${formatDataComentario(c.created_at)}</p>
-      <p class="comentario-texto">${c.texto}</p>
+    <div class="comentario-item" data-id="${c.id}">
+      <div class="comentario-item__header">
+        <p class="comentario-data">${formatDataComentario(c.created_at)}</p>
+        <div class="comentario-item__actions">
+          <button type="button" class="btn-comentario-mini editar" data-id="${c.id}" title="Editar comentário">✏️</button>
+          <button type="button" class="btn-comentario-mini deletar" data-id="${c.id}" title="Excluir comentário">🗑️</button>
+        </div>
+      </div>
+      <p class="comentario-texto">${escaparHtmlComentario(c.texto)}</p>
     </div>
   `).join('');
+
+  lista.querySelectorAll('.btn-comentario-mini.editar').forEach(btn => {
+    btn.addEventListener('click', () => iniciarEdicaoComentario(btn.dataset.id, data));
+  });
+
+  lista.querySelectorAll('.btn-comentario-mini.deletar').forEach(btn => {
+    btn.addEventListener('click', () => deletarComentario(btn.dataset.id));
+  });
+}
+
+function iniciarEdicaoComentario(id, listaComentarios) {
+  const comentario = listaComentarios.find(c => c.id === id);
+  if (!comentario) return;
+
+  comentarioEmEdicaoId = id;
+
+  const textarea = document.getElementById('novo-comentario');
+  textarea.value = comentario.texto;
+  textarea.focus();
+
+  const btnSalvar = document.getElementById('btn-salvar-comentario');
+  if (btnSalvar) btnSalvar.textContent = '✓ Salvar Edição';
+
+  document.getElementById('comentario-edicao-aviso')?.classList.remove('hidden');
+}
+
+function cancelarEdicaoComentario() {
+  comentarioEmEdicaoId = null;
+
+  const textarea = document.getElementById('novo-comentario');
+  if (textarea) textarea.value = '';
+
+  const btnSalvar = document.getElementById('btn-salvar-comentario');
+  if (btnSalvar) btnSalvar.textContent = 'Enviar';
+
+  document.getElementById('comentario-edicao-aviso')?.classList.add('hidden');
 }
 
 async function salvarComentario() {
   const texto = document.getElementById('novo-comentario').value.trim();
   if (!texto) { showToast('Escreva um comentário antes de enviar.', 'error'); return; }
 
-  const { error } = await supabaseClient.from('comentarios_clientes').insert({
-    client_id: clienteComentarioId,
-    admin_id:  currentAdmin.id,
-    texto,
-  });
+  const btn = document.getElementById('btn-salvar-comentario');
+  const modoEdicao = !!comentarioEmEdicaoId;
+  if (btn) { btn.disabled = true; btn.textContent = modoEdicao ? 'Salvando...' : 'Enviando...'; }
 
-  if (error) { showToast('Erro ao enviar: ' + error.message, 'error'); return; }
+  let error;
 
-  document.getElementById('novo-comentario').value = '';
-  showToast('Comentário enviado!');
+  if (modoEdicao) {
+    ({ error } = await supabaseClient
+      .from('comentarios_clientes')
+      .update({ texto })
+      .eq('id', comentarioEmEdicaoId));
+  } else {
+    ({ error } = await supabaseClient.from('comentarios_clientes').insert({
+      client_id: clienteComentarioId,
+      admin_id:  currentAdmin.id,
+      texto,
+    }));
+  }
+
+  if (btn) btn.disabled = false;
+
+  if (error) {
+    showToast('Erro ao salvar: ' + error.message, 'error');
+    if (btn) btn.textContent = modoEdicao ? '✓ Salvar Edição' : 'Enviar';
+    return;
+  }
+
+  showToast(modoEdicao ? 'Comentário atualizado!' : 'Comentário enviado!');
+  cancelarEdicaoComentario();
+  await carregarComentarios(clienteComentarioId);
+}
+
+async function deletarComentario(id) {
+  if (!confirm('Excluir este comentário? Esta ação não pode ser desfeita.')) return;
+
+  const { error } = await supabaseClient.from('comentarios_clientes').delete().eq('id', id);
+
+  if (error) {
+    showToast('Erro ao excluir: ' + error.message, 'error');
+    return;
+  }
+
+  showToast('Comentário excluído.');
+  if (comentarioEmEdicaoId === id) cancelarEdicaoComentario();
   await carregarComentarios(clienteComentarioId);
 }
 
@@ -249,4 +363,4 @@ function formatDataComentario(dateStr) {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-console.log('✅ clientes.js carregado (com botão de Lançamentos)');
+console.log('✅ clientes.js carregado (privacidade + comentários editáveis + Lançamentos)');

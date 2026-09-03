@@ -1,552 +1,1114 @@
-a<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MentorFin</title>
-    <link rel="icon" type="image/png" href="logo.png">
-    <link rel="stylesheet" href="style.css">
-    <!-- Anti-flicker: o body começa com visibility:hidden (via CSS).
-         Se o JS demorar mais de 2s, o ui.js revela automaticamente.
-         Garantia extra: nunca mostra sidebar antes do login. -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js"></script>
-    <!-- ══ PWA — instalação como app ════════════════════════════
-         manifest.json define nome/ícone/cor que o Android/iOS usam
-         ao instalar via "Adicionar à tela inicial".
-         apple-mobile-web-app-* cobrem Safari/iOS que ignora o manifest.
-    ═══════════════════════════════════════════════════════════ -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0b0f1a">
+    <meta name="description" content="Ityrapuã Store - Marketplace comunitário com BI integrado">
+    <title>Ityrapuã Store | Marketplace</title>
+
+    <script>
+  (function () {
+    var theme = localStorage.getItem('ityrapuan_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
+
+
+
+    <!-- ✅ PERFORMANCE + PWA: limpeza de Service Worker fantasma/cache
+         antigo agora roda UMA ÚNICA VEZ por aparelho (marcada com uma
+         flag no localStorage), não em toda visita como antes. Antes
+         disso, TODA carga de página apagava todo o cache e desregistrava
+         o Service Worker, então nenhuma visita repetida aproveitava
+         cache de nada. Além disso, o Service Worker (sw.js) agora é de
+         fato registrado — sem isso o Chrome/Android nunca considera o
+         app "instalável". Precisa continuar sendo o PRIMEIRO script. -->
+    <script>
+        (function () {
+            const CLEANUP_FLAG = 'ityrapuan_sw_cleanup_v1_done';
+            const jaLimpou = localStorage.getItem(CLEANUP_FLAG);
+
+            function registrarSW() {
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('sw.js').catch(err => {
+                        console.warn('Falha ao registrar Service Worker:', err);
+                    });
+                }
+            }
+
+            if (!jaLimpou && 'serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations()
+                    .then(regs => regs.forEach(reg => reg.unregister()))
+                    .then(() => 'caches' in window
+                        ? caches.keys().then(names => Promise.all(names.map(n => caches.delete(n))))
+                        : null)
+                    .then(() => {
+                        localStorage.setItem(CLEANUP_FLAG, '1');
+                        registrarSW();
+                    });
+            } else {
+                registrarSW();
+            }
+        })();
+        
+
+        
+    </script>
+
+    <!-- PWA -->
     <link rel="manifest" href="manifest.json">
-    <meta name="application-name"                content="MentorFin">
-    <meta name="apple-mobile-web-app-capable"    content="yes">
-    <meta name="apple-mobile-web-app-title"      content="MentorFin">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="mobile-web-app-capable"          content="yes">
-    <meta name="theme-color"                     content="#6495ff">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- ✅ NOVO: tipografia da marca — Sora nos títulos (mais autoral),
+         Inter no corpo (leitura confortável) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- ESTILOS -->
+    <link rel="stylesheet" href="style.css?v=9">
+
+    <!-- ✅ PERFORMANCE: Tailwind agora é um CSS já compilado e minificado
+         (26KB), gerado escaneando todo o projeto — no lugar do script
+         que baixava o compilador inteiro e recompilava TODO o CSS no
+         celular, a cada carregamento de página.
+         ⚠️ Se no futuro adicionar uma classe Tailwind nova em algum
+         arquivo que ainda não usa essa classe, ela só aparece depois de
+         reconstruir esse arquivo (é só pedir). Suba o "?v=" ao regerar. -->
+    <link rel="stylesheet" href="tailwind.built.css?v=3">
+    <link rel="stylesheet" href="theme.css?v=2">
+
+    <!-- CHART.JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+
+    <!-- SUPABASE JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- LUCIDE ICONS -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        #ad-form-text textarea { font-family: 'Inter', sans-serif; }
+        #preview-title { word-break: break-word; }
+        #preview-text  { word-break: break-word; white-space: pre-wrap; }
+
+        #logout-btn {
+            min-height: 56px;
+            align-items: center;
+        }
+        #logout-btn:hover {
+            background: rgba(239,68,68,0.1);
+            border-color: rgba(239,68,68,0.3);
+        }
+    </style>
 </head>
-<body>
+<body class="bg-[#0b0f1a] text-slate-200 flex min-h-screen font-sans overflow-x-hidden">
 
-<div class="app-container">
+    <button id="theme-toggle-btn" aria-label="Alternar modo claro/escuro" title="Alternar modo claro/escuro">
+    <i data-lucide="sun" id="theme-toggle-icon-sun" class="hidden"></i>
+    <i data-lucide="moon" id="theme-toggle-icon-moon"></i>
+</button>
 
-    <!-- ============================================================
-         TELA: LOGIN ÚNICO
-    ============================================================ -->
-    <div id="loginScreen" class="screen screen--centered active">
-        <div class="login-box">
-            <h1 class="login-box__title" style="font-family:'Courier New',monospace;color:var(--accent);letter-spacing:.05em;">MentorFin</h1>
-            <p class="login-box__subtitle">Organize a sua vida financeira de forma simples</p>
-            <form onsubmit="handleLogin(event)">
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="loginEmail" placeholder="seu@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>Senha</label>
-                    <input type="password" id="loginPassword" placeholder="Digite sua senha" required>
-                </div>
-                <button type="submit" class="btn btn--primary">Entrar</button>
-            </form>
-            <div id="loginError" class="login-error hidden"></div>
-            <p class="login-box__toggle-text">
-                Não tem conta?
-                <a href="#" onclick="toggleScreen('registerScreen'); return false;">Criar conta</a>
-            </p>
-        </div>
-    </div>
-
-    <!-- ============================================================
-         TELA: CADASTRO
-    ============================================================ -->
-    <div id="registerScreen" class="screen screen--centered">
-        <div class="login-box" style="max-width:460px;">
-            <h1 class="login-box__title" style="font-family:'Courier New',monospace;color:var(--accent);letter-spacing:.05em;">MentorFin</h1>
-            <p class="login-box__subtitle">Criar Conta — É Gratuito</p>
-            <form onsubmit="handleRegister(event)">
-                <div class="form-group">
-                    <label>Nome Completo</label>
-                    <input type="text" id="registerNome" placeholder="Ex: Fulano da silva" required>
-                </div>
-                <div class="form-group">
-                    <label>Como quer ser chamado? (Apelido)</label>
-                    <input type="text" id="registerApelido" placeholder="Ex: Fulanin" required>
-                </div>
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" id="registerEmail" placeholder="fulanin258@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>Senha</label>
-                    <input type="password" id="registerPassword" placeholder="Mínimo 6 caracteres" required>
-                </div>
-                <div class="form-group">
-                    <label>Confirmar Senha</label>
-                    <input type="password" id="registerPasswordConfirm" placeholder="Repita a senha" required>
-                </div>
-                <button type="submit" class="btn btn--primary">Criar Conta</button>
-                <div id="registerError" class="login-error hidden" style="margin-top:12px;"></div>
-            </form>
-            <p class="login-box__toggle-text">
-                Já tem conta?
-                <a href="#" onclick="toggleScreen('loginScreen'); return false;">Fazer login</a>
-            </p>
-        </div>
-    </div>
-
-    <!-- ============================================================
-         TELA: ONBOARDING (primeiro acesso — fallback)
-    ============================================================ -->
-    <div id="onboardingScreen" class="screen screen--centered">
-        <div class="login-box" style="max-width:480px;">
-            <h1 class="login-box__title">👋 Bem-vindo ao MentorFin!</h1>
-            <p class="login-box__subtitle">Só falta completar o teu perfil para começar</p>
-            <form onsubmit="handleOnboarding(event)">
-                <div class="form-group">
-                    <label>Nome Completo</label>
-                    <input type="text" id="onboardingNome" placeholder="Ex: Flavin" required>
-                </div>
-                <div class="form-group">
-                    <label>Como quer ser chamado? (Apelido)</label>
-                    <input type="text" id="onboardingApelido" placeholder="Ex: Seu apelido" required>
-                </div>
-                <button type="submit" class="btn btn--primary" style="margin-top:8px;">Continuar →</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- ============================================================
-         TELA: PAINEL CLIENTE
-         (O painel do administrador vive exclusivamente em admin.html)
-    ============================================================ -->
-    <div id="clientScreen" class="screen layout-wrapper">
-        <aside class="sidebar">
-            <div class="sidebar__header">
-                <p style="font-family:'Courier New',monospace;font-size:1.1rem;font-weight:800;color:var(--accent);letter-spacing:.05em;margin-bottom:0;">MentorFin</p>
+    <!-- ========================================
+         SIDEBAR NAVEGAÇÃO
+         ======================================== -->
+    <aside class="app-sidebar border-r border-slate-800/50 p-4 flex flex-col sticky top-0 h-screen bg-[#0b0f1a] z-40">
+        <div class="mb-10 flex items-center gap-3 justify-center lg:justify-start leading-none">
+            <svg id="brand-logo-train" width="34" height="34" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="flex-shrink-0" aria-hidden="true">
+                <defs>
+                    <linearGradient id="brand-logo-gradient" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+                        <stop offset="0" stop-color="#3b82f6"/>
+                        <stop offset="0.55" stop-color="#8b5cf6"/>
+                        <stop offset="1" stop-color="#f59e0b"/>
+                    </linearGradient>
+                    <linearGradient id="darkMetal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#374151"/>
+                        <stop offset="0.5" stop-color="#111827"/>
+                        <stop offset="1" stop-color="#030712"/>
+                    </linearGradient>
+                    <linearGradient id="lightMetal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#ffffff"/>
+                        <stop offset="0.55" stop-color="#e2e8f0"/>
+                        <stop offset="1" stop-color="#94a3b8"/>
+                    </linearGradient>
+                    <radialGradient id="wheelMetal" cx="0.35" cy="0.3" r="0.8">
+                        <stop offset="0" stop-color="#4b5563"/>
+                        <stop offset="0.5" stop-color="#111827"/>
+                        <stop offset="1" stop-color="#000000"/>
+                    </radialGradient>
+                    <filter id="softBlur" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="1.1"/>
+                    </filter>
+                </defs>
+                <rect width="100" height="100" rx="24" fill="url(#brand-logo-gradient)"/>
+                <!-- Trilho -->
+                <rect x="2" y="88" width="96" height="3" rx="1.5" fill="url(#darkMetal)"/>
+                <rect x="2" y="88" width="96" height="1" fill="#ffffff" fill-opacity="0.25"/>
+                <!-- Biela + pistão -->
+                <rect x="35" y="75.3" width="24" height="3.6" rx="1.8" fill="url(#darkMetal)"/>
+                <rect x="26" y="72" width="12" height="8" rx="2" fill="url(#darkMetal)"/>
+                <rect x="26" y="73.5" width="12" height="1.4" fill="#ffffff" fill-opacity="0.2"/>
+                <!-- Rodas -->
+                <circle cx="18" cy="78" r="6" fill="url(#wheelMetal)"/>
+                <circle cx="37" cy="77" r="9.5" fill="url(#wheelMetal)"/>
+                <circle cx="58" cy="77" r="9.5" fill="url(#wheelMetal)"/>
+                <circle cx="80" cy="78" r="6" fill="url(#wheelMetal)"/>
+                <circle cx="37" cy="77" r="9.5" fill="none" stroke="#f59e0b" stroke-opacity="0.35" stroke-width="1"/>
+                <circle cx="58" cy="77" r="9.5" fill="none" stroke="#f59e0b" stroke-opacity="0.35" stroke-width="1"/>
+                <circle cx="18" cy="78" r="2" fill="#f59e0b"/>
+                <circle cx="37" cy="77" r="3.2" fill="#f59e0b"/>
+                <circle cx="58" cy="77" r="3.2" fill="#f59e0b"/>
+                <circle cx="80" cy="78" r="2" fill="#f59e0b"/>
+                <!-- Para-choque frontal (pilot) com grade -->
+                <path d="M23 62 L10 82 L25 82 L25 62 Z" fill="url(#darkMetal)"/>
+                <line x1="13" y1="78" x2="22" y2="65" stroke="#000" stroke-opacity="0.4" stroke-width="1"/>
+                <line x1="16" y1="80.5" x2="23.5" y2="68" stroke="#000" stroke-opacity="0.4" stroke-width="1"/>
+                <line x1="19.5" y1="82" x2="24.5" y2="72" stroke="#000" stroke-opacity="0.4" stroke-width="1"/>
+                <!-- Caldeira (cilindro, com rebites) -->
+                <rect x="23" y="45" width="58" height="19" rx="9.5" fill="url(#lightMetal)" stroke="#1e293b" stroke-width="1.3"/>
+                <line x1="26" y1="49" x2="78" y2="49" stroke="#ffffff" stroke-opacity="0.6" stroke-width="1.4"/>
+                <line x1="30" y1="60" x2="76" y2="60" stroke="#1e293b" stroke-opacity="0.12" stroke-width="1.2"/>
+                <circle cx="33" cy="60" r="0.9" fill="#1e293b" fill-opacity="0.3"/>
+                <circle cx="45" cy="60" r="0.9" fill="#1e293b" fill-opacity="0.3"/>
+                <circle cx="65" cy="60" r="0.9" fill="#1e293b" fill-opacity="0.3"/>
+                <circle cx="73" cy="60" r="0.9" fill="#1e293b" fill-opacity="0.3"/>
+                <!-- Placa/emblema frontal -->
+                <circle cx="27" cy="54.5" r="3.7" fill="url(#darkMetal)"/>
+                <circle cx="27" cy="54.5" r="2" fill="#fde047"/>
+                <!-- Domo de vapor -->
+                <rect x="47" y="35.5" width="15" height="11.5" rx="6" fill="url(#lightMetal)" stroke="#1e293b" stroke-width="1.3"/>
+                <line x1="49" y1="38" x2="60" y2="38" stroke="#ffffff" stroke-opacity="0.6" stroke-width="1"/>
+                <!-- Chaminé (funil) -->
+                <rect x="30" y="26" width="7" height="20" rx="1.5" fill="url(#darkMetal)"/>
+                <path d="M26.5 17 h14 l-2.2 8.5 h-9.6 Z" fill="url(#darkMetal)"/>
+                <rect x="29" y="30.5" width="9" height="3" fill="#f59e0b"/>
+                <ellipse cx="33.5" cy="17" rx="7" ry="1.6" fill="#000" fill-opacity="0.35"/>
+                <!-- Fumaça (com blur) -->
+                <g filter="url(#softBlur)">
+                    <circle cx="33" cy="11" r="4.2" fill="#e5e7eb" fill-opacity="0.85"/>
+                    <circle cx="26" cy="5" r="3.3" fill="#e5e7eb" fill-opacity="0.55"/>
+                    <circle cx="20" cy="1" r="2.3" fill="#e5e7eb" fill-opacity="0.35"/>
+                </g>
+                <!-- Cabine -->
+                <rect x="78" y="27" width="20" height="37" rx="3" fill="url(#darkMetal)"/>
+                <rect x="75" y="24" width="26" height="6" rx="2" fill="url(#darkMetal)"/>
+                <rect x="75" y="24" width="26" height="1.4" fill="#ffffff" fill-opacity="0.25"/>
+                <rect x="83" y="35" width="9" height="10" rx="1.5" fill="#7dd3fc"/>
+                <rect x="83" y="35" width="9" height="3" fill="#ffffff" fill-opacity="0.35"/>
+                <line x1="87.5" y1="35" x2="87.5" y2="45" stroke="#1e293b" stroke-opacity="0.4" stroke-width="0.8"/>
+            </svg>
+            <div>
+                <div class="text-blue-500 font-black text-lg italic tracking-tighter uppercase leading-none" style="font-family:var(--font-display, inherit)">Ityrapuã</div>
+                <span class="text-slate-500 text-[9px] font-bold uppercase tracking-widest">Store · Marketplace</span>
             </div>
-            <nav class="sidebar__nav">
-                <button class="sidebar__nav-item active"
-                    onclick="switchClientView('cli-dashboard', event)">📈 Dashboard</button>
-                <button class="sidebar__nav-item"
-                    onclick="switchClientView('cli-transactions', event)">💳 Transações</button>
-                <button class="sidebar__nav-item"
-                    onclick="switchClientView('cli-goals', event)">🎯 Metas</button>
-                <button class="sidebar__nav-item"
-                    onclick="switchClientView('cli-planning', event)">📋 Planejamento</button>
-                <button class="sidebar__nav-item sidebar__nav-item--profile"
-                    onclick="showClientProfile()">👤 Perfil</button>
-            </nav>
-        </aside>
+        </div>
 
-        <main class="main-content">
-            <header class="client-header">
-                <h1>👋 Bem-vindo, <span id="clientNameDisplay"></span></h1>
-                <p>Organize a sua vida financeira de forma simples.</p>
-            </header>
+        <nav class="flex-1 space-y-2">
+            <button class="w-full flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="market">
+                <i data-lucide="shopping-bag" class="flex-shrink-0"></i>
+                <span class="block font-bold text-sm group-hover:text-white">LOJA</span>
+            </button>
 
-            <!-- DASHBOARD CLIENTE -->
-            <section id="cli-dashboard" class="view-section active">
-                <div class="card">
-                    <div class="card__header-row">
-                        <h3>📊 Resumo do Período</h3>
-                    </div>
+            <button id="bi-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="bi">
+                <i data-lucide="bar-chart-3" class="flex-shrink-0 text-green-500"></i>
+                <span class="block font-bold text-sm group-hover:text-white">BI / GESTÃO</span>
+            </button>
 
-                    <!-- Filtro de período do Dashboard — mesma lógica do
-                         Histórico (Todos/Hoje/7 dias/Este mês/Mês
-                         passado/Personalizado). Ver app.js:
-                         initDashboardFilters()/getFiltroDashboardAtual(). -->
-                    <div class="history-filters dashboard-filters">
-                        <div class="form-group">
-                            <label>Período</label>
-                            <select id="dashPeriodoRapido">
-                                <option value="todos">Todos os lançamentos</option>
-                                <option value="hoje">Hoje</option>
-                                <option value="7dias">Últimos 7 dias</option>
-                                <option value="mes" selected>Este mês</option>
-                                <option value="mes_passado">Mês passado</option>
-                                <option value="personalizado">Personalizado</option>
-                            </select>
-                        </div>
-                        <div class="history-filters__custom-range hidden" id="dashPeriodoPersonalizadoRow">
-                            <div class="form-group">
-                                <label>De</label>
-                                <input type="date" id="dashDataInicio">
-                            </div>
-                            <div class="form-group">
-                                <label>Até</label>
-                                <input type="date" id="dashDataFim">
-                            </div>
-                        </div>
-                    </div>
+            <button id="admin-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="admin">
+                <i data-lucide="shield-alert" class="flex-shrink-0 text-red-500"></i>
+                <span class="block font-bold text-sm text-red-500 group-hover:text-red-400">ADMIN</span>
+            </button>
 
-                    <div class="resume-grid">
-                        <div class="resume-item receita">
-                            <span class="label">Receitas</span>
-                            <span class="value" id="totalReceitas">R$ 0,00</span>
-                        </div>
-                        <div class="resume-item despesa">
-                            <span class="label">Despesas</span>
-                            <span class="value" id="totalDespesas">R$ 0,00</span>
-                        </div>
-                        <div class="resume-item saldo">
-                            <span class="label">Saldo Disponível</span>
-                            <span class="value" id="saldo">R$ 0,00</span>
-                            <span class="bi-detail" id="saldoAlocadoDetalhe"></span>
-                        </div>
-                    </div>
+            <button id="seller-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="seller">
+                <i data-lucide="package" class="flex-shrink-0 text-blue-500"></i>
+                <span class="block font-bold text-sm text-blue-500 group-hover:text-blue-400">ESTOQUE</span>
+            </button>
+
+            <button id="ads-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="ads">
+                <i data-lucide="megaphone" class="flex-shrink-0 text-yellow-500"></i>
+                <span class="block font-bold text-sm text-yellow-500 group-hover:text-yellow-400">ANÚNCIOS</span>
+            </button>
+
+            <button id="ads-requests-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="ads-requests">
+                <i data-lucide="mail" class="flex-shrink-0 text-orange-500"></i>
+                <span class="block font-bold text-sm text-orange-500 group-hover:text-orange-400">SOLICITAÇÕES</span>
+            </button>
+
+            <button id="vendor-settings-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="vendor-settings">
+                <i data-lucide="settings" class="flex-shrink-0 text-cyan-500"></i>
+                <span class="block font-bold text-sm text-cyan-500 group-hover:text-cyan-400">STATUS DA LOJA</span>
+            </button>
+
+            <button id="tenants-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="tenants">
+                <i data-lucide="building-2" class="flex-shrink-0 text-purple-500"></i>
+                <span class="block font-bold text-sm text-purple-500 group-hover:text-purple-400">VENDEDORES</span>
+            </button>
+
+            <button id="moderation-nav-btn" class="w-full hidden flex items-center gap-4 p-4 rounded-2xl hover:bg-white/5 transition-all group" data-nav="moderation">
+                <i data-lucide="shield-check" class="flex-shrink-0 text-pink-500"></i>
+                <span class="block font-bold text-sm text-pink-500 group-hover:text-pink-400">MODERAÇÃO</span>
+            </button>
+        </nav>
+
+        <div class="flex flex-col gap-2 mt-auto">
+            <button class="relative p-4 bg-blue-600 rounded-2xl flex items-center justify-center gap-3 hover:bg-blue-500 transition-all shadow-lg shadow-blue-600/20 group" data-action="toggle-cart">
+                <i data-lucide="shopping-cart" class="text-white flex-shrink-0"></i>
+                <span id="cart-count" class="absolute -top-1 -right-1 bg-white text-blue-600 text-[10px] px-1.5 py-0.5 rounded-full font-black">0</span>
+                <span class="block text-white font-bold text-xs">CARRINHO</span>
+            </button>
+
+            <button id="login-btn"
+                class="w-full flex items-center gap-2 p-4 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-bold text-xs uppercase transition-all justify-center lg:justify-start"
+                data-action="open-login">
+                <i data-lucide="log-in" class="flex-shrink-0"></i>
+                <span class="block">Entrar</span>
+            </button>
+
+            <button id="logout-btn"
+                class="w-full hidden flex items-center gap-3 p-3 rounded-2xl border border-white/5 text-slate-400 font-bold text-xs transition-all justify-center lg:justify-start"
+                data-action="open-profile"
+                title="Ver perfil">
+                <i data-lucide="log-out" class="flex-shrink-0"></i>
+                <span class="block">Sair</span>
+            </button>
+
+            <a href="privacidade.html" class="w-full text-center text-[10px] text-slate-600 hover:text-slate-400 font-bold py-1 transition-all hidden lg:block">
+                Política de Privacidade
+            </a>
+        </div>
+    </aside>
+
+    <!-- ========================================
+         CONTEÚDO PRINCIPAL
+         ======================================== -->
+    <main class="flex-1 p-6 overflow-x-hidden">
+
+        <!-- ===== MARKETPLACE / LOJA ===== -->
+        <section id="market-section" class="animate-in">
+            <div id="market-search-bar" class="mb-6">
+                <i data-lucide="search" class="market-search-icon"></i>
+                <input id="market-search-input" type="text" placeholder="Buscar produtos, categorias..." autocomplete="off">
+                <button id="market-search-clear" class="hidden" aria-label="Limpar busca">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div id="ads-hero"
+                 class="mb-12 w-full h-48 bg-slate-900 rounded-[32px] relative border border-white/5 overflow-hidden shadow-2xl cursor-pointer group">
+                <img id="hero-ads-img" class="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="Anúncio" />
+                <div id="hero-ads-fallback" class="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800"></div>
+            </div>
+            <div class="scroll-cue" aria-hidden="true">
+                <i data-lucide="chevron-down"></i>
+                <span>Role para ver os produtos</span>
+            </div>
+
+            <h2 class="text-3xl font-black mb-1">Marketplace</h2>
+            <p class="market-subtitle">Feito por quem mora aqui, pra quem mora aqui — novidades toda semana 👇</p>
+            <div class="category-filter-wrapper mb-6">
+                <button id="category-scroll-left" type="button" class="category-scroll-arrow category-scroll-arrow-left is-hidden" onclick="window.APP.products.scrollCategoryBar(-1)" aria-label="Ver categorias anteriores">
+                    <i data-lucide="chevron-left"></i>
+                </button>
+                <div id="category-filter-bar" class="category-filter-bar"></div>
+                <button id="category-scroll-right" type="button" class="category-scroll-arrow category-scroll-arrow-right is-hidden" onclick="window.APP.products.scrollCategoryBar(1)" aria-label="Ver mais categorias">
+                    <i data-lucide="chevron-right"></i>
+                </button>
+            </div>
+            <div id="product-grid" class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"></div>
+        </section>
+
+
+        <!-- ===== BI DASHBOARD ===== -->
+<section id="bi-section" class="hidden animate-in">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h2 id="bi-main-title" class="text-3xl font-black text-green-500">DASHBOARD BI</h2>
+        <div class="flex items-center gap-3 flex-wrap">
+            <span id="bi-period-label" class="text-xs font-bold text-slate-400 uppercase tracking-wide"></span>
+            <button onclick="window.print()" class="no-print bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold py-2 px-3 rounded-lg transition-all">
+                🖨️ Imprimir / PDF
+            </button>
+        </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 mb-6">
+        <button class="bi-period-btn" data-period="hoje" onclick="window.APP.bi.setPeriod('hoje')">Hoje</button>
+        <button class="bi-period-btn" data-period="ontem" onclick="window.APP.bi.setPeriod('ontem')">Ontem</button>
+        <button class="bi-period-btn" data-period="7dias" onclick="window.APP.bi.setPeriod('7dias')">7 dias</button>
+        <button class="bi-period-btn" data-period="mes" onclick="window.APP.bi.setPeriod('mes')">Este mês</button>
+        <button class="bi-period-btn" data-period="mes_passado" onclick="window.APP.bi.setPeriod('mes_passado')">Mês passado</button>
+        <button class="bi-period-btn" data-period="tudo" onclick="window.APP.bi.setPeriod('tudo')">Tudo</button>
+    </div>
+
+    <div class="bg-slate-900/50 rounded-2xl border border-white/5 mb-8">
+        <div onclick="window.APP.bi.toggleSection('margin')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-slate-300">⚖️ Custo vs. Lucro</h3>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="event.stopPropagation(); window.APP.bi.toggleInfo('info-margin-bar')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+                <i data-lucide="chevron-down" id="sec-margin-chevron" class="w-5 h-5 text-slate-500 transition-transform rotate-180"></i>
+            </div>
+        </div>
+        <div id="sec-margin-content" class="px-6 pb-6">
+            <p id="info-margin-bar" class="hidden text-[11px] text-slate-500 mb-4 leading-relaxed">De cada real vendido no período, quanto foi custo do produto e quanto sobrou de lucro pra você.</p>
+            <div id="bi-margin-bar"></div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">FATURAMENTO</div>
+                <button onclick="window.APP.bi.toggleInfo('info-revenue')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-revenue" class="text-3xl font-black text-green-500">R$ 0,00</div>
+            <div id="bi-revenue-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-revenue" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Soma de tudo que foi vendido no período, mesmo o que ainda não foi confirmado o pagamento.</p>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">LUCRO</div>
+                <button onclick="window.APP.bi.toggleInfo('info-profit')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-profit" class="text-3xl font-black text-blue-500">R$ 0,00</div>
+            <div id="bi-profit-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-profit" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Faturamento menos o custo dos produtos vendidos (o que sobra de verdade no bolso).</p>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">MARGEM</div>
+                <button onclick="window.APP.bi.toggleInfo('info-margin')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-margin" class="text-3xl font-black text-yellow-500">0%</div>
+            <div id="bi-margin-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-margin" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Quanto do faturamento vira lucro. Ex: margem de 30% significa que, de cada R$ 100 vendidos, R$ 30 é lucro.</p>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">TICKET MÉDIO</div>
+                <button onclick="window.APP.bi.toggleInfo('info-ticket')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-ticket-medio" class="text-3xl font-black text-pink-400">R$ 0,00</div>
+            <div id="bi-ticket-medio-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-ticket" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Valor médio gasto por pedido (faturamento ÷ número de pedidos). Ajuda a saber se as pessoas estão comprando mais ou menos por vez.</p>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">PEDIDOS</div>
+                <button onclick="window.APP.bi.toggleInfo('info-orders')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-orders" class="text-3xl font-black text-purple-500">0</div>
+            <div id="bi-orders-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-orders" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Quantidade de pedidos fechados no período (não importa quantos itens tinha em cada um).</p>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-[20px] border border-white/5">
+            <div class="flex items-center justify-between mb-2">
+                <div class="text-slate-500 text-xs uppercase font-black">ITENS VENDIDOS</div>
+                <button onclick="window.APP.bi.toggleInfo('info-items')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+            </div>
+            <div id="bi-items-sold" class="text-3xl font-black text-cyan-400">0</div>
+            <div id="bi-items-sold-delta" class="text-xs font-bold mt-1"></div>
+            <p id="info-items" class="hidden text-[11px] text-slate-500 mt-2 leading-relaxed">Soma de unidades vendidas (2 pedidos de 3 itens cada = 6 itens vendidos).</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5">
+            <h3 id="bi-revenue-chart-title" class="text-lg font-black text-slate-300 mb-4">📈 Faturamento</h3>
+            <div style="height:300px"><canvas id="chart-revenue"></canvas></div>
+        </div>
+        <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5">
+            <h3 class="text-lg font-black text-slate-300 mb-4">🏆 Top Produtos</h3>
+            <div style="height:220px"><canvas id="chart-products"></canvas></div>
+            <div id="chart-products-legend" class="chart-legend-list"></div>
+        </div>
+    </div>
+
+    <div class="bg-slate-900/50 rounded-2xl border border-white/5 mb-8">
+        <div onclick="window.APP.bi.toggleSection('abc')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-slate-300">🎯 Curva ABC de Produtos</h3>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="event.stopPropagation(); window.APP.bi.toggleInfo('info-abc')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+                <i data-lucide="chevron-down" id="sec-abc-chevron" class="w-5 h-5 text-slate-500 transition-transform"></i>
+            </div>
+        </div>
+        <div id="sec-abc-content" class="hidden px-6 pb-6">
+            <p id="info-abc" class="hidden text-[11px] text-slate-500 mb-4 leading-relaxed">
+                Classifica os produtos pelo quanto cada um contribui pro faturamento. <strong class="text-white">Classe A</strong> = poucos produtos que sustentam a maior parte da receita (nunca deixe faltar estoque deles). <strong class="text-white">Classe B</strong> = contribuição intermediária. <strong class="text-white">Classe C</strong> = contribuem pouco — avalie se vale continuar tendo em estoque.
+            </p>
+            <div id="bi-abc-table" class="space-y-2">
+                <div class="text-slate-600 text-center py-6">Sem dados suficientes neste período</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="bi-vendor-ranking-wrapper" class="bg-slate-900/50 rounded-2xl border border-white/5 mb-8 hidden">
+        <div onclick="window.APP.bi.toggleSection('ranking')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-slate-300">🏆 Ranking de Vendedores</h3>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="event.stopPropagation(); window.APP.bi.toggleInfo('info-ranking')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+                <i data-lucide="chevron-down" id="sec-ranking-chevron" class="w-5 h-5 text-slate-500 transition-transform"></i>
+            </div>
+        </div>
+        <div id="sec-ranking-content" class="hidden px-6 pb-6">
+            <p id="info-ranking" class="hidden text-[11px] text-slate-500 mb-4 leading-relaxed">Compara o desempenho de cada vendedor no período selecionado — quem mais vende, quem dá mais lucro.</p>
+            <div id="bi-vendor-ranking" class="space-y-2">
+                <div class="text-slate-600 text-center py-6">Sem dados suficientes neste período</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-slate-900/50 rounded-2xl border border-white/5 mb-8">
+        <div onclick="window.APP.bi.toggleSection('stock')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-red-400">⚠️ Estoque Crítico</h3>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="event.stopPropagation(); window.APP.bi.toggleInfo('info-stock')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+                <i data-lucide="chevron-down" id="sec-stock-chevron" class="w-5 h-5 text-slate-500 transition-transform"></i>
+            </div>
+        </div>
+        <div id="sec-stock-content" class="hidden px-6 pb-6">
+            <p id="info-stock" class="hidden text-[11px] text-slate-500 mb-4 leading-relaxed">Produtos com estoque igual ou abaixo do mínimo configurado no cadastro — hora de repor antes que acabe e você perca vendas.</p>
+            <div id="bi-low-stock-list" class="space-y-2">
+                <div class="text-slate-600 text-center py-6">Carregando...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-slate-900/50 rounded-2xl border border-white/5 mb-8">
+        <div onclick="window.APP.bi.toggleSection('turnover')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-slate-300">📦 Giro de Estoque — Dias de Cobertura</h3>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="event.stopPropagation(); window.APP.bi.toggleInfo('info-turnover')" class="text-slate-600 hover:text-slate-400" title="O que é isso?">ⓘ</button>
+                <i data-lucide="chevron-down" id="sec-turnover-chevron" class="w-5 h-5 text-slate-500 transition-transform"></i>
+            </div>
+        </div>
+        <div id="sec-turnover-content" class="hidden px-6 pb-6">
+            <p id="info-turnover" class="hidden text-[11px] text-slate-500 mb-4 leading-relaxed">Com base no ritmo de vendas do período selecionado, mostra quantos dias o estoque atual de cada produto ainda vai durar. Poucos dias restantes = repor com urgência. Produtos sem nenhuma venda aparecem como "estoque parado" — candidatos a promoção ou liquidação.</p>
+            <div id="bi-stock-turnover" class="space-y-2">
+                <div class="text-slate-600 text-center py-6">Carregando...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-slate-900/50 rounded-2xl border border-white/5 mb-6">
+        <div onclick="window.APP.bi.toggleSection('orders')" class="w-full flex items-center justify-between p-6 cursor-pointer select-none">
+            <h3 class="text-lg font-black text-slate-300">📋 Detalhamento de Pedidos</h3>
+            <i data-lucide="chevron-down" id="sec-orders-chevron" class="w-5 h-5 text-slate-500 transition-transform flex-shrink-0"></i>
+        </div>
+        <div id="sec-orders-content" class="hidden px-6 pb-6">
+            <div id="bi-orders-detail" class="space-y-3"></div>
+        </div>
+    </div>
+</section>
+
+        <!-- ===== TENANTS / VENDEDORES ===== -->
+        <section id="tenants-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-purple-500">🏪 GERENCIAR VENDEDORES</h2>
+
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 mb-8">
+                <div class="flex justify-between items-center mb-4 gap-3 flex-wrap">
+                    <h3 class="text-lg font-black text-red-400">👑 Administradores Supremos</h3>
+                    <button onclick="window.APP.tenants.promptPromoteSupreme()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-black py-2 px-4 rounded-xl transition-all whitespace-nowrap">
+                        + PROMOVER ADMIN
+                    </button>
                 </div>
+                <div id="supreme-admins-list" class="space-y-3">
+                    <div class="text-slate-600 text-center py-4">Carregando...</div>
+                </div>
+            </div>
 
-                <div class="card">
-                    <h3>🎯 Análise Financeira</h3>
-                    <div class="bi-grid">
-                        <div class="bi-item">
-                            <span class="bi-label">Custo de Sobrevivência</span>
-                            <span class="bi-value" id="biSurvivalCost">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
-                            <span class="bi-label">Estilo de Vida</span>
-                            <span class="bi-value" id="biLifestyleCost">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
-                            <span class="bi-label">Investimentos</span>
-                            <span class="bi-value" id="biInvestments">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
-                            <span class="bi-label">Dívidas e Financiamentos</span>
-                            <span class="bi-value" id="biDebt">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
-                            <span class="bi-label">Renda Passiva</span>
-                            <span class="bi-value" id="biPassiveIncome">R$ 0,00</span>
-                        </div>
-                        <div class="bi-item">
-                            <span class="bi-label">Índice de Cobertura</span>
-                            <span class="bi-value" id="biCoverage">0%</span>
+            <div id="tenants-stats" class="mb-8">
+                <div class="text-slate-600 text-center py-4">Carregando stats...</div>
+            </div>
+            <h3 class="text-xl font-black mb-4 text-slate-300">📊 Vendedores</h3>
+            <div id="tenants-list" class="space-y-4">
+                <div class="text-slate-600 text-center py-8">Carregando...</div>
+            </div>
+        </section>
+
+        <!-- ===== MODERAÇÃO DE PRODUTOS ===== -->
+        <section id="moderation-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-2 text-pink-500">🛡️ MODERAÇÃO DE PRODUTOS</h2>
+            <p class="text-slate-500 text-xs mb-6 leading-relaxed">
+                Produtos com palavra proibida entram automaticamente retidos (fora da vitrine) até você aprovar.
+                Você também pode bloquear qualquer outro produto publicado a qualquer momento.
+            </p>
+
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 mb-8">
+                <h3 class="text-lg font-black text-slate-300 mb-3">🚫 Palavras Proibidas</h3>
+                <p class="text-[11px] text-slate-500 mb-4">Produtos cujo nome ou descrição contenham qualquer uma dessas palavras são retidos automaticamente.</p>
+
+                <form onsubmit="window.APP.moderation.addKeyword(event)" class="flex gap-2 mb-4">
+                    <input id="moderation-keyword-input" type="text" placeholder="Digite uma palavra ou expressão..."
+                        class="flex-1 p-3 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" required>
+                    <button type="submit" class="bg-pink-600 hover:bg-pink-500 text-white font-bold px-5 rounded-lg text-sm transition-all">
+                        + Adicionar
+                    </button>
+                </form>
+
+                <div id="moderation-keywords-list" class="flex flex-wrap gap-2">
+                    <div class="text-slate-600 text-xs text-center py-4">Carregando...</div>
+                </div>
+            </div>
+
+            <div class="flex gap-2 mb-4 flex-wrap">
+                <button data-mod-filter="flagged" onclick="window.APP.moderation.setFilter('flagged')" class="px-4 py-2 rounded-full text-xs font-bold uppercase transition-all border bg-orange-600 text-white border-orange-600">
+                    🚫 Retidos
+                </button>
+                <button data-mod-filter="recent" onclick="window.APP.moderation.setFilter('recent')" class="px-4 py-2 rounded-full text-xs font-bold uppercase transition-all border bg-white/5 text-slate-400 border-white/10">
+                    🕓 Publicados Recentemente
+                </button>
+            </div>
+
+            <div id="moderation-queue-list" class="space-y-3">
+                <div class="text-slate-600 text-center py-8">Carregando...</div>
+            </div>
+        </section>
+
+        <!-- ===== ADMIN PANEL ===== -->
+        <section id="admin-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-red-500">ADMIN PANEL</h2>
+            <button class="mb-6 bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-6 rounded-2xl transition-all" data-action="open-product-modal">
+                ➕ NOVO PRODUTO
+            </button>
+            <div id="admin-list" class="space-y-3"></div>
+        </section>
+
+        <!-- ===== SELLER PANEL (ESTOQUE) ===== -->
+        <section id="seller-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-blue-500">ESTOQUE</h2>
+            <button class="mb-6 bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-6 rounded-2xl transition-all" data-action="open-product-modal">
+                ➕ NOVO PRODUTO
+            </button>
+            <div id="seller-list" class="space-y-3"></div>
+        </section>
+
+        <!-- ===== ADS PANEL ===== -->
+        <section id="ads-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-yellow-500">📢 ANÚNCIOS</h2>
+
+            <div class="flex gap-3 mb-6">
+                <button id="btn-ad-type-image" class="flex-1 py-3 px-4 rounded-2xl font-bold transition-all bg-blue-600 text-white" data-action="toggle-ad-type" data-type="image">
+                    🖼️ ANÚNCIO COM IMAGEM
+                </button>
+                <button id="btn-ad-type-text" class="flex-1 py-3 px-4 rounded-2xl font-bold transition-all text-slate-400 hover:bg-white/5" data-action="toggle-ad-type" data-type="text">
+                    📝 ANÚNCIO COM TEXTO
+                </button>
+            </div>
+
+            <form id="ad-form-image" class="mb-8" data-form="ads" data-type="image">
+                <div class="bg-slate-900/50 p-6 rounded-3xl border border-white/5 space-y-4">
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">🖼️ IMAGEM DO ANÚNCIO</label>
+                        <button type="button" id="ad-image-drop-zone"
+                            class="w-full border-2 border-dashed border-slate-600 rounded-2xl p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
+                            <input id="ad-image-input" type="file" accept="image/*" class="hidden"
+                                onchange="document.getElementById('ad-image-name').innerText = this.files[0]?.name || 'Nenhum arquivo escolhido'">
+                            <div class="text-4xl mb-2">📁</div>
+                            <span id="ad-image-name" class="text-slate-400">Clique ou arraste uma imagem</span>
+                        </button>
+                    </div>
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">🔗 LINK (WhatsApp, site, etc)</label>
+                        <input id="ad-link-input" type="text" placeholder="https://wa.me/5535991264352"
+                            class="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none">
+                    </div>
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl transition-all uppercase mt-6">
+                        📤 PUBLICAR ANÚNCIO COM IMAGEM
+                    </button>
+                </div>
+            </form>
+
+            <form id="ad-form-text" class="mb-8 hidden" data-form="ads" data-type="text">
+                <div class="bg-slate-900/50 p-6 rounded-3xl border border-white/5 space-y-4">
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">📝 TÍTULO DO ANÚNCIO</label>
+                        <input id="ad-text-title" type="text" placeholder="Ex: PROMOÇÃO 50% OFF" maxlength="100"
+                            class="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none">
+                        <div class="text-[10px] text-slate-500 mt-1">Máximo 100 caracteres</div>
+                    </div>
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">✍️ CONTEÚDO / DESCRIÇÃO</label>
+                        <textarea id="ad-text-content" placeholder="Digite aqui a mensagem do seu anúncio..." maxlength="500" rows="5"
+                            class="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none resize-none"></textarea>
+                        <div class="text-[10px] text-slate-500 mt-1">Máximo 500 caracteres</div>
+                    </div>
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">🔗 LINK (Opcional)</label>
+                        <input id="ad-text-link" type="text" placeholder="https://wa.me/5535991264352"
+                            class="w-full bg-slate-800 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none">
+                        <div class="text-[10px] text-slate-500 mt-1">Será aberto ao clicar no anúncio</div>
+                    </div>
+                    <div>
+                        <label class="text-xs font-black text-slate-300 uppercase block mb-2">👁️ PREVIEW</label>
+                        <div class="bg-slate-800 border border-white/10 rounded-xl p-4 min-h-32 flex items-center justify-center">
+                            <div class="text-center">
+                                <h3 id="preview-title" class="text-2xl font-black text-yellow-400 mb-2">TÍTULO DO ANÚNCIO</h3>
+                                <p id="preview-text" class="text-sm text-slate-300">Conteúdo do seu anúncio aparecerá aqui</p>
+                            </div>
                         </div>
                     </div>
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl transition-all uppercase mt-6">
+                        📤 PUBLICAR ANÚNCIO COM TEXTO
+                    </button>
                 </div>
-            </section>
+            </form>
 
-            <!-- TRANSAÇÕES CLIENTE -->
-            <section id="cli-transactions" class="view-section">
-                <div class="card">
-                    <h3>➕ Registar Transação</h3>
-                    <form onsubmit="handleAddTransaction(event)">
-                        <div class="form-group">
-                            <label>Descrição (opcional)</label>
-                            <input type="text" id="transDescription" placeholder="Ex: Supermercado Extra, Uber pro trabalho, Salário...">
-                        </div>
-                        <div class="form-group">
-                            <label>Categoria</label>
-                            <div class="custom-select" id="transCategoryWrapper">
-                                <button type="button" class="custom-select__trigger" id="transCategoryTrigger" disabled>
-                                    <span id="transCategoryTriggerText">Carregando categorias...</span>
-                                    <span class="custom-select__chevron">▾</span>
-                                </button>
-                                <div class="custom-select__panel hidden" id="transCategoryPanel"></div>
-                                <input type="hidden" id="transCategory">
-                            </div>
-                            <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()">+ Criar categoria personalizada</button>
-                        </div>
-                        <div class="form-group hidden" id="transMetaWrapper">
-                            <label>🎯 Vincular a uma Meta (opcional)</label>
-                            <select id="transMeta">
-                                <option value="">Não vincular a nenhuma meta</option>
-                            </select>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Valor (R$)</label>
-                                <input type="number" id="transValue" placeholder="0,00" step="0.01" min="0.01" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Data</label>
-                                <input type="date" id="transDate" required>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn--primary">Registar</button>
-                    </form>
+            <div class="mt-8">
+                <h3 class="text-lg font-black text-slate-300 mb-4">📊 Anúncios Publicados</h3>
+                <div id="ads-list" class="space-y-3">
+                    <div class="text-center text-slate-500 py-8">Carregando anúncios...</div>
                 </div>
+            </div>
 
-                <!-- ============================================================
-                     IMPORTAÇÃO DE EXTRATO (OFX/CSV)
-                ============================================================ -->
-                <div class="card">
-                    <h3>📥 Importar Extrato (OFX/CSV)</h3>
-                    <p style="color:var(--text-muted); font-size:12px; margin-bottom:14px;">
-                        Envie um arquivo .ofx ou .csv do seu banco. O sistema tenta classificar cada lançamento
-                        automaticamente — você revisa e corrige antes de qualquer coisa ser salva.
+            <div id="ads-admin-requests-wrapper" class="mt-10 hidden">
+                <h3 class="text-lg font-black text-orange-400 mb-4">📋 Solicitações de Vendedores</h3>
+                <div id="ads-admin-requests-list" class="space-y-3">
+                    <div class="text-slate-600 text-center py-8">Carregando...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== ADS REQUESTS (SOLICITAÇÕES DE ANÚNCIO) ===== -->
+        <section id="ads-requests-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-orange-500">📋 SOLICITAÇÕES DE ANÚNCIO</h2>
+            <div id="ads-requests-form-container"></div>
+            <div id="ads-requests-container"></div>
+        </section>
+
+        <!-- ===== VENDOR SETTINGS (STATUS DA LOJA) ===== -->
+        <section id="vendor-settings-section" class="hidden animate-in">
+            <h2 class="text-3xl font-black mb-6 text-cyan-500">⚙️ STATUS DA LOJA</h2>
+
+            <div id="global-store-override-section" class="bg-slate-900/50 p-6 rounded-2xl border border-red-500/30 mb-6 hidden">
+                <h3 class="text-lg font-black text-red-400 mb-2">🚨 Fechar a Loja Inteira</h3>
+                <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+                    Isso fecha o marketplace <strong class="text-slate-300">INTEIRO</strong>, pra todos os vendedores, imediatamente
+                    — sobrepõe até o horário automático (Sabbath/noturno). Use só em emergência (imprevisto, manutenção, etc).
+                    Fica fechado até você mesmo reabrir aqui.
+                </p>
+                <div id="global-override-status" class="mb-4 p-3 bg-white/5 rounded-lg text-sm">
+                    Carregando...
+                </div>
+                <button id="global-override-toggle-btn" onclick="window.APP.vendorSettings.toggleGlobalOverride()" class="w-full py-3 rounded-xl font-black text-white transition-all">
+                    Carregando...
+                </button>
+            </div>
+
+            <div id="vendor-pix-key-section" class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 mb-6">
+                <h3 class="text-lg font-black text-slate-300 mb-2">💳 Minha Chave Pix</h3>
+                <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+                    É essa chave que aparece pro comprador na hora de pagar. Sem ela cadastrada, a venda acontece do mesmo jeito, mas o comprador precisa te chamar no WhatsApp pra combinar o pagamento — o que atrasa (e às vezes derruba) a venda.
+                </p>
+                <div id="vendor-pix-key-warning" class="hidden mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 font-bold">
+                    ⚠️ Você ainda não cadastrou sua chave Pix — cadastre agora pra não perder vendas.
+                </div>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <input type="text" id="vendor-pix-key-input" placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"
+                        class="flex-1 p-3 bg-slate-800 border border-white/10 rounded-lg text-white text-sm placeholder-slate-500">
+                    <button type="button" id="vendor-save-pix-btn" class="bg-green-600 hover:bg-green-500 text-white font-bold px-6 py-3 rounded-lg text-sm transition-all whitespace-nowrap">
+                        💾 Salvar Chave Pix
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 mb-6">
+                <h3 class="text-lg font-black text-slate-300 mb-4">Status Atual</h3>
+                <button id="vendor-status-main-toggle" class="w-full py-4 px-6 rounded-xl font-bold text-white mb-4 transition-all" style="background:#22c55e;">
+                    <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:white;margin-right:10px;"></span>
+                    <span id="vendor-status-main-text">Online</span>
+                </button>
+                <div class="flex justify-between p-3 bg-slate-800/50 rounded-lg text-sm">
+                    <span class="text-slate-400">Status:</span>
+                    <span id="vendor-status-main-value" class="font-bold text-green-500">Online</span>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5 mb-6">
+                <h3 class="text-lg font-black text-slate-300 mb-4">Horário Automático</h3>
+                <label class="flex items-center gap-3 mb-4 cursor-pointer">
+                    <input type="checkbox" id="vendor-auto-schedule-toggle" class="w-5 h-5">
+                    <span class="text-sm text-slate-300">Ativar horário automático</span>
+                </label>
+                <div id="vendor-schedule-inputs" style="display:none;" class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 mb-2">Abertura</label>
+                        <input type="time" id="vendor-opening-time" value="09:00" class="w-full p-3 bg-slate-800 border border-white/10 rounded-lg text-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-400 mb-2">Fechamento</label>
+                        <input type="time" id="vendor-closing-time" value="18:00" class="w-full p-3 bg-slate-800 border border-white/10 rounded-lg text-white">
+                    </div>
+                    <button type="button" id="vendor-save-schedule-btn" class="w-full py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition-all">
+                        💾 Salvar Horário
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-6 rounded-2xl border border-white/5">
+                <h3 class="text-lg font-black text-slate-300 mb-4">Últimas Alterações</h3>
+                <div id="vendor-history-list" class="space-y-2 max-h-64 overflow-y-auto">
+                    <div class="text-slate-500 text-center py-4">Sem histórico ainda.</div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ========================================
+         BOTTOM NAVIGATION BAR (MOBILE ONLY)
+         ======================================== -->
+    <nav id="bottom-nav" role="navigation" aria-label="Navegação principal">
+
+        <button class="bnav-btn" data-nav="market" id="bnav-market">
+            <i data-lucide="shopping-bag"></i>
+            <span>Loja</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="bi" id="bnav-bi">
+            <i data-lucide="bar-chart-3" style="color:#22c55e"></i>
+            <span>BI</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="admin" id="bnav-admin">
+            <i data-lucide="shield-alert" style="color:#ef4444"></i>
+            <span>Admin</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="seller" id="bnav-seller">
+            <i data-lucide="package" style="color:#3b82f6"></i>
+            <span>Estoque</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="ads" id="bnav-ads">
+            <i data-lucide="megaphone" style="color:#eab308"></i>
+            <span>Ads</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="ads-requests" id="bnav-ads-requests">
+            <i data-lucide="mail" style="color:#f97316"></i>
+            <span>Pedidos</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="vendor-settings" id="bnav-vendor-settings">
+            <i data-lucide="settings" style="color:#06b6d4"></i>
+            <span>Status</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="tenants" id="bnav-tenants">
+            <i data-lucide="building-2" style="color:#a855f7"></i>
+            <span>Vendedores</span>
+        </button>
+
+        <button class="bnav-btn hidden" data-nav="moderation" id="bnav-moderation">
+            <i data-lucide="shield-check" style="color:#ec4899"></i>
+            <span>Moderação</span>
+        </button>
+
+        <button class="bnav-btn bnav-cart" data-action="toggle-cart">
+            <div class="bnav-icon-wrap" style="position:relative;display:inline-flex">
+                <i data-lucide="shopping-cart"></i>
+                <span id="bnav-cart-count" style="position:absolute;top:-5px;right:-8px;background:#3b82f6;color:white;font-size:9px;font-weight:900;min-width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:0 3px">0</span>
+            </div>
+            <span>Carrinho</span>
+        </button>
+
+        <button class="bnav-btn bnav-login" id="bnav-login-btn" data-action="open-login">
+            <i data-lucide="log-in"></i>
+            <span>Entrar</span>
+        </button>
+
+        <button class="bnav-btn bnav-logout hidden" id="bnav-logout-btn" data-action="open-profile" title="Ver perfil">
+            <i data-lucide="log-out"></i>
+            <span>Sair</span>
+        </button>
+
+    </nav>
+
+    <!-- ========================================
+         CART DRAWER
+         ======================================== -->
+    <div id="cart-drawer" class="fixed right-0 top-0 w-full sm:w-96 h-screen bg-[#161b2c] border-l border-white/5 shadow-2xl translate-x-full transition-transform duration-300 z-[300] flex flex-col">
+        <div class="flex justify-between items-center p-6 pb-4 flex-shrink-0">
+            <h3 class="text-2xl font-black">CARRINHO</h3>
+            <button class="text-slate-400 hover:text-white" data-action="close-cart">
+                <i data-lucide="x" class="w-6 h-6"></i>
+            </button>
+        </div>
+        <div id="cart-items" class="flex-1 overflow-y-auto px-6 space-y-3"></div>
+        <div class="flex-shrink-0 border-t border-white/5 px-6 pt-4 pb-6" style="padding-bottom: max(24px, env(safe-area-inset-bottom));">
+            <div class="flex justify-between text-lg font-black mb-4">
+                <span>TOTAL</span>
+                <span id="cart-total" class="text-blue-500">R$ 0,00</span>
+            </div>
+            <button class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl transition-all" data-action="checkout">
+                ✓ FINALIZAR COMPRA
+            </button>
+        </div>
+    </div>
+
+    <!-- ========================================
+         AUTH MODAL
+         ======================================== -->
+    <div id="auth-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+        <div class="bg-[#161b2c] p-8 rounded-[40px] w-full max-w-md border border-white/10 shadow-2xl">
+            <div class="flex gap-2 mb-6">
+                <button id="login-tab-btn" class="flex-1 py-3 rounded-2xl bg-blue-600 text-white font-bold text-sm uppercase transition-all" data-tab="login">LOGIN</button>
+                <button id="signup-tab-btn" class="flex-1 py-3 rounded-2xl text-slate-400 font-bold text-sm uppercase transition-all hover:text-white" data-tab="signup">CADASTRO</button>
+                <button id="forgot-tab-btn" class="flex-1 py-3 rounded-2xl text-slate-400 font-bold text-sm uppercase transition-all hover:text-white" data-tab="forgot">SENHA</button>
+            </div>
+
+            <div id="login-tab" class="space-y-4">
+                <form data-form="auth" data-type="login" class="space-y-4">
+                    <input id="login-email" type="email" placeholder="Email" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <input id="login-password" type="password" placeholder="Senha" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl transition-all">ENTRAR</button>
+                </form>
+            </div>
+
+            <div id="signup-tab" class="hidden space-y-4">
+                <form data-form="auth" data-type="signup" class="space-y-4">
+                    <input id="signup-name" type="text" placeholder="Nome" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <input id="signup-email" type="email" placeholder="Email" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <input id="signup-phone" type="tel" placeholder="Telefone" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <input id="signup-password" type="password" placeholder="Senha (mín 6 caracteres)" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl transition-all">CADASTRAR</button>
+                    <p class="text-[11px] text-slate-500 text-center leading-relaxed">
+                        Ao se cadastrar, você concorda com nossa
+                        <a href="privacidade.html" target="_blank" class="text-blue-400 hover:text-blue-300 underline">Política de Privacidade e Termos de Uso</a>.
                     </p>
-                    <div class="form-group">
-                        <label>Arquivo (.ofx ou .csv)</label>
-                        <input type="file" id="importFileInput" accept=".ofx,.csv,text/csv,application/vnd.intu.qbo">
-                    </div>
-                    <button type="button" class="btn btn--secondary" id="btnProcessarImportacao">Processar Arquivo</button>
+                </form>
+            </div>
 
-                    <div id="importResumoStatus" class="import-status hidden"></div>
+            <div id="forgot-tab" class="hidden space-y-4">
+                <p class="text-slate-400 text-sm text-center">Digite seu email para receber o link de redefinição de senha.</p>
+                <form data-form="auth" data-type="forgot" class="space-y-4">
+                    <input id="forgot-email" type="email" placeholder="Seu email" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                    <button type="submit" class="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-black py-4 rounded-2xl transition-all">📧 ENVIAR LINK DE RECUPERAÇÃO</button>
+                </form>
+            </div>
 
-                    <div id="importReviewContainer" class="import-review hidden">
-                        <div class="import-review__header">
-                            <h4>Revise antes de importar</h4>
-                            <label class="import-review__select-all">
-                                <input type="checkbox" id="importSelecionarTodas" checked>
-                                Selecionar todas
-                            </label>
-                        </div>
-                        <div class="import-review__table-wrapper">
-                            <table class="import-review__table" id="importReviewTable">
-                                <thead>
-                                    <tr>
-                                        <th></th>
-                                        <th>Data</th>
-                                        <th>Descrição</th>
-                                        <th>Valor</th>
-                                        <th>Tipo</th>
-                                        <th>Categoria</th>
-                                        <th>Origem</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="importReviewTableBody"></tbody>
-                            </table>
-                        </div>
-                        <button type="button" class="btn-link-nova-categoria" onclick="abrirModalNovaCategoria()" style="margin:14px 0 4px;">+ Criar categoria personalizada</button>
-                        <div class="import-review__actions">
-                            <button type="button" class="btn--secondary btn" id="btnCancelarImportacao">Cancelar</button>
-                            <button type="button" class="btn btn--primary" id="btnConfirmarImportacao">✓ Confirmar Importação</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- HISTÓRICO — agora recolhível: o cabeçalho é um botão
-                     (.btn-collapse) que abre/fecha #historicoConteudo
-                     (filtros + lista) via toggleHistoricoCard() (app.js). -->
-                <div class="card">
-                    <button type="button" class="btn-collapse" onclick="toggleHistoricoCard()">
-                        <span>📋 Histórico</span>
-                        <span class="collapse-icon" id="historicoCollapseIcon">▾</span>
-                    </button>
-
-                    <div id="historicoConteudo">
-                        <div class="history-filters" style="margin-top:16px;">
-                            <div class="form-group">
-                                <label>Período</label>
-                                <select id="histPeriodoRapido">
-                                    <option value="todos">Todos os lançamentos</option>
-                                    <option value="hoje">Hoje</option>
-                                    <option value="7dias">Últimos 7 dias</option>
-                                    <option value="mes">Este mês</option>
-                                    <option value="mes_passado">Mês passado</option>
-                                    <option value="personalizado">Personalizado</option>
-                                </select>
-                            </div>
-                            <div class="history-filters__custom-range hidden" id="histPeriodoPersonalizadoRow">
-                                <div class="form-group">
-                                    <label>De</label>
-                                    <input type="date" id="histDataInicio">
-                                </div>
-                                <div class="form-group">
-                                    <label>Até</label>
-                                    <input type="date" id="histDataFim">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>Tipo</label>
-                                <select id="histFiltroTipo">
-                                    <option value="">Todos</option>
-                                    <option value="receita">Receitas</option>
-                                    <option value="despesa">Despesas</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div id="transactionHistoryList" class="transactions-list">
-                            <p class="empty-state">Nenhuma transação registada</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- METAS CLIENTE -->
-            <section id="cli-goals" class="view-section">
-                <div class="card">
-                    <h3>🎯 Minhas Metas</h3>
-                    <button onclick="toggleAddMetaForm()" class="btn btn--secondary" style="margin-bottom: 15px;">
-                        + Adicionar Meta
-                    </button>
-
-                    <div id="addMetaForm" class="hidden" style="padding: 20px; background: rgba(100, 150, 255, 0.08); border-radius: 10px; margin-bottom: 15px; border: 1px solid rgba(100, 150, 255, 0.2);">
-                        <form onsubmit="handleAddMeta(event)">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Nome da Meta</label>
-                                    <input type="text" id="metaName" placeholder="Ex: Fundo de Emergência" required>
-                                </div>
-                                <div class="form-group">
-                                    <label>Valor Necessário (R$)</label>
-                                    <input type="number" id="metaValue" placeholder="0,00" step="0.01" min="0" required>
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn--primary">Criar Meta</button>
-                        </form>
-                    </div>
-
-                    <div id="clientMetasList" class="metas-client-grid">
-                        <p class="empty-state">Nenhuma meta criada</p>
-                    </div>
-                </div>
-            </section>
-
-            <!-- PLANEJAMENTO CLIENTE -->
-            <section id="cli-planning" class="view-section">
-                <div class="card">
-                    <h3>📊 Planejamento Personalizado</h3>
-                    <div id="clientPlanningRequestArea"></div>
-                    <div id="clientPlanningList">
-                        <p class="empty-state">Aguardando planejamento do administrador...</p>
-                    </div>
-                </div>
-            </section>
-        </main>
+            <button class="mt-4 w-full text-slate-400 hover:text-white font-bold py-2 transition-all" data-action="close-auth-modal">Fechar</button>
+        </div>
     </div>
 
-</div><!-- /.app-container -->
-
-<!-- ============================================================
-     MODAL: NOVA CATEGORIA PERSONALIZADA
-============================================================ -->
-<div id="modalNovaCategoria" class="modal hidden">
-    <div class="modal__content" style="max-width:440px;">
-        <header class="modal__header">
-            <h2>🏷️ Nova Categoria</h2>
-            <button onclick="closeModal('modalNovaCategoria')" class="modal__close-btn">✕</button>
-        </header>
-        <div class="modal__body">
-            <div class="form-group">
-                <label>Nome da categoria</label>
-                <input type="text" id="novaCategoriaNome" placeholder="Ex: Uber, Freelance Design...">
+    <!-- ========================================
+         PERFIL DO USUÁRIO
+         ======================================== -->
+    <div id="profile-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+        <div class="bg-[#161b2c] p-8 rounded-[40px] w-full max-w-sm border border-white/10 shadow-2xl text-center">
+            <div id="profile-modal-avatar" class="w-20 h-20 mx-auto rounded-full flex items-center justify-center font-black text-2xl text-white mb-4">
+                --
             </div>
-            <div class="form-group">
-                <label>É uma receita ou despesa?</label>
-                <select id="novaCategoriaTipo">
-                    <option value="receita">Receita (dinheiro que entra)</option>
-                    <option value="despesa">Despesa (dinheiro que sai)</option>
+            <h3 id="profile-modal-name" class="text-xl font-black text-white mb-1">—</h3>
+            <p id="profile-modal-role" class="text-sm font-bold mb-6">—</p>
+
+            <div class="bg-white/5 rounded-2xl p-4 text-left space-y-3 mb-6">
+                <div class="flex justify-between items-center text-sm gap-3">
+                    <span class="text-slate-400 flex items-center gap-2 flex-shrink-0">
+                        <i data-lucide="mail" class="w-4 h-4"></i> Email
+                    </span>
+                    <span id="profile-modal-email" class="text-white font-bold truncate">—</span>
+                </div>
+                <div class="flex justify-between items-center text-sm gap-3">
+                    <span class="text-slate-400 flex items-center gap-2 flex-shrink-0">
+                        <i data-lucide="phone" class="w-4 h-4"></i> Telefone
+                    </span>
+                    <span id="profile-modal-phone" class="text-white font-bold truncate">—</span>
+                </div>
+            </div>
+
+            <button id="profile-become-seller-btn" onclick="window.APP.auth.becomeSeller()" class="hidden w-full bg-green-600 hover:bg-green-500 text-white font-black py-3 rounded-2xl transition-all mb-2 flex items-center justify-center gap-2">
+                🚀 QUERO VENDER
+            </button>
+
+            <button data-action="logout" class="w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-2xl transition-all mb-2 flex items-center justify-center gap-2">
+                <i data-lucide="log-out" class="w-4 h-4"></i> SAIR DA CONTA
+            </button>
+            <button class="w-full text-slate-400 hover:text-white font-bold py-2 transition-all" data-action="close-profile-modal">Fechar</button>
+        </div>
+    </div>
+
+    <!-- ========================================
+         TENANT DETAILS MODAL
+         ======================================== -->
+    <div id="tenant-details-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+        <div class="bg-[#161b2c] p-8 rounded-[40px] w-full max-w-md border border-white/10 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h3 id="tenant-details-title" class="text-2xl font-black mb-6">DETALHES</h3>
+            <div id="tenant-details-content" class="space-y-2">
+                <div class="text-slate-600 text-center py-8">Carregando...</div>
+            </div>
+            <button class="mt-6 w-full text-slate-400 hover:text-white font-bold py-2 transition-all" data-action="close-tenant-modal">Fechar</button>
+        </div>
+    </div>
+
+    <!-- ========================================
+         ADMIN MODAL (Criar/Editar Produto)
+         ======================================== -->
+    <div id="admin-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+        <div class="bg-[#161b2c] p-8 rounded-[40px] w-full max-w-md border border-white/10 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h3 class="text-2xl font-black mb-6">NOVO PRODUTO</h3>
+            <form data-form="product" class="space-y-4">
+                <input id="p-name" type="text" placeholder="Nome do Produto" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                <select id="p-category" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white" required>
+                    <option value="">Selecione a Categoria</option>
+                    <option value="Alimentos">🍎 Alimentos</option>
+                    <option value="Bebidas">🥤 Bebidas</option>
+                    <option value="Roupas e Acessórios">👕 Roupas e Acessórios</option>
+                    <option value="Eletrônicos">📱 Eletrônicos</option>
+                    <option value="Casa e Decoração">🏠 Casa e Decoração</option>
+                    <option value="Beleza e Higiene">🧴 Beleza e Higiene</option>
+                    <option value="Brinquedos">🧸 Brinquedos</option>
+                    <option value="Livros e Papelaria">📚 Livros e Papelaria</option>
+                    <option value="Serviços">🛠️ Serviços</option>
+                    <option value="Outros">📦 Outros</option>
                 </select>
-            </div>
-            <div id="novaCategoriaSugestao" class="categoria-sugestao-ia hidden"></div>
-            <button type="button" onclick="handleClassificarNovaCategoria()" id="btnClassificarCategoria" class="btn btn--secondary" style="width:100%; margin-top:6px;">Analisar categoria</button>
-            <button type="button" onclick="handleConfirmarNovaCategoria()" id="btnConfirmarCategoria" class="btn btn--primary hidden" style="width:100%; margin-top:10px;">✓ Confirmar e Salvar</button>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================================
-     MODAL: PERFIL CLIENTE
-============================================================ -->
-<div id="clientProfileModal" class="modal hidden">
-    <div class="modal__content">
-        <header class="modal__header">
-            <h2>👤 Meu Perfil</h2>
-            <button onclick="closeModal('clientProfileModal')" class="modal__close-btn">✕</button>
-        </header>
-        <div class="modal__body">
-            <div style="background: rgba(100, 150, 255, 0.1); padding: 20px; border-radius: 8px;">
-                <p style="color:#a0a0b0; font-size:12px; margin-bottom:6px;">Nome</p>
-                <p id="profileClientName" style="color:#fff; font-size:18px; font-weight:700;"></p>
-                <p style="color:#a0a0b0; font-size:12px; margin:15px 0 6px;">Email</p>
-                <p id="profileClientEmail" style="color:#6495ff; font-size:14px;"></p>
-            </div>
-            <button onclick="handleLogout()" class="btn btn--logout" style="width:100%; margin-top:20px;">🚪 Sair da conta</button>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================================
-     MODAL: SOLICITAR PLANEJAMENTO
-============================================================ -->
-<div id="modalSolicitarPlanejamento" class="modal hidden">
-    <div class="modal__content" style="max-width:440px;">
-        <header class="modal__header">
-            <h2>📩 Solicitar Planejamento</h2>
-            <button onclick="closeModal('modalSolicitarPlanejamento')" class="modal__close-btn">✕</button>
-        </header>
-        <div class="modal__body">
-            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                O administrador vai receber um aviso e criar um planejamento personalizado pra você.
-            </p>
-            <div class="form-group">
-                <label>Quer contar alguma coisa específica? (opcional)</label>
-                <textarea id="solicitarPlanejamentoMensagem" rows="4" placeholder="Ex: Quero focar em juntar dinheiro para uma viagem no fim do ano..."></textarea>
-            </div>
-            <button type="button" onclick="handleEnviarSolicitacaoPlanejamento()" id="btnEnviarSolicitacaoPlanejamento" class="btn btn--primary" style="width:100%;">Enviar Solicitação</button>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================================
-     MODAL: EDITAR TRANSAÇÃO
-============================================================ -->
-<div id="editTransactionModal" class="modal hidden">
-    <div class="modal__content" style="max-width:460px;">
-        <header class="modal__header">
-            <h2>✏️ Editar Transação</h2>
-            <button onclick="fecharModalEdicaoTransacao()" class="modal__close-btn">✕</button>
-        </header>
-        <div class="modal__body">
-            <input type="hidden" id="editTransId">
-            <div class="form-group">
-                <label>Descrição</label>
-                <input type="text" id="editTransDescription" placeholder="Ex: Supermercado Extra">
-            </div>
-            <div class="form-group">
-                <label>Categoria</label>
-                <div class="custom-select" id="editTransCategoryWrapper">
-                    <button type="button" class="custom-select__trigger" id="editTransCategoryTrigger">
-                        <span id="editTransCategoryTriggerText">Selecione uma categoria</span>
-                        <span class="custom-select__chevron">▾</span>
-                    </button>
-                    <div class="custom-select__panel hidden" id="editTransCategoryPanel"></div>
-                    <input type="hidden" id="editTransCategory">
+                <input id="p-price" type="number" step="0.01" placeholder="Preço de Venda" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                <input id="p-cost" type="number" step="0.01" placeholder="Custo" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500">
+                <input id="p-stock" type="number" placeholder="Estoque" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500">
+                <div>
+                    <input id="p-min-stock" type="number" placeholder="Estoque Mínimo" value="5" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500">
+                    <div class="text-[10px] text-slate-500 mt-1 px-1">Abaixo desse número, o produto aparece no alerta de Estoque Crítico do BI</div>
                 </div>
-            </div>
-            <div class="form-group hidden" id="editTransMetaWrapper">
-                <label>🎯 Vincular a uma Meta (opcional)</label>
-                <select id="editTransMeta">
-                    <option value="">Não vincular a nenhuma meta</option>
+
+                <div class="bg-cyan-500/5 border border-cyan-500/20 rounded-2xl p-4">
+                    <label class="text-xs font-black text-cyan-300 uppercase block mb-2">📦 Preço por Atacado (opcional)</label>
+                    <div class="text-[10px] text-slate-500 mb-3 leading-relaxed">Comprando a partir de uma certa quantidade, cada unidade sai mais barata. Deixe os dois campos em branco pra não usar.</div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <input id="p-bulk-min-qty" type="number" min="2" placeholder="Qtd. mínima" class="w-full p-3 rounded-xl bg-slate-800 border border-white/5 text-white placeholder-slate-500 text-sm">
+                            <div class="text-[9px] text-slate-500 mt-1 px-1">Ex: 3</div>
+                        </div>
+                        <div>
+                            <input id="p-bulk-unit-price" type="number" step="0.01" min="0" placeholder="Preço/unidade" class="w-full p-3 rounded-xl bg-slate-800 border border-white/5 text-white placeholder-slate-500 text-sm">
+                            <div class="text-[9px] text-slate-500 mt-1 px-1">Ex: 10,00</div>
+                        </div>
+                    </div>
+                </div>
+                <textarea id="p-desc" placeholder="Descrição" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500 resize-none h-20"></textarea>
+
+                <!-- ✅ NOVO (v5.0): galeria de mídia — até 5 fotos/vídeos
+                     por produto (a primeira foto vira a capa mostrada em
+                     todo o resto do sistema). -->
+                <div>
+                    <label class="text-xs font-black text-slate-300 uppercase block mb-2">
+                        📷🎥 Fotos e Vídeos <span id="p-media-count" class="text-slate-500 normal-case font-normal">(0/5)</span>
+                    </label>
+                    <div id="p-media-preview" class="media-preview-grid"></div>
+                    <input id="p-media-input" type="file" accept="image/*,video/*" multiple
+                        class="w-full p-3 rounded-2xl bg-slate-800 border border-white/5 text-white text-xs">
+                    <div class="text-[10px] text-slate-500 mt-1 px-1">Até 5 arquivos no total (foto ou vídeo), 20MB cada. A primeira foto vira a capa do produto.</div>
+                </div>
+
+                <button id="btn-save" type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl transition-all">✓ SALVAR</button>
+                <button type="button" class="w-full text-slate-400 hover:text-white font-bold py-2 transition-all" data-action="close-product-modal">Cancelar</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================
+         CUSTOMER CHECKOUT MODAL
+         ======================================== -->
+    <div id="customer-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+        <div class="bg-[#161b2c] p-8 rounded-[40px] w-full max-w-md border border-white/10 shadow-2xl">
+            <h3 class="text-2xl font-black mb-6">FINALIZAR COMPRA</h3>
+            <form data-form="checkout" class="space-y-4">
+                <input id="cust-name" type="text" placeholder="Seu Nome" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                <input id="cust-phone" type="tel" placeholder="WhatsApp (com DDD)" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white placeholder-slate-500" required>
+                <select id="cust-payment" class="w-full p-4 rounded-2xl bg-slate-800 border border-white/5 text-white" required>
+                    <option value="">Escolha a forma de pagamento</option>
+                    <option value="Pix">Pix</option>
+                    <option value="Dinheiro">Dinheiro na Entrega</option>
+                    <option value="Cartão">Cartão na Entrega</option>
                 </select>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Valor (R$)</label>
-                    <input type="number" id="editTransValue" step="0.01" min="0.01">
-                </div>
-                <div class="form-group">
-                    <label>Data</label>
-                    <input type="date" id="editTransDate">
-                </div>
-            </div>
-            <button type="button" onclick="handleSalvarEdicaoTransacao()" id="btnSalvarEdicaoTransacao" class="btn btn--primary" style="width:100%;">Salvar Alterações</button>
-            <button type="button" onclick="handleDeletarTransacao()" class="btn btn--logout" style="width:100%; margin-top:10px;">🗑️ Excluir Transação</button>
+                <button id="btn-finish" type="submit" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl transition-all">✓ CONFIRMAR COMPRA</button>
+                <button type="button" class="w-full text-slate-400 hover:text-white font-bold py-2 transition-all" data-action="close-checkout-modal">Cancelar</button>
+                <p class="text-[11px] text-slate-500 text-center leading-relaxed">
+                    Seus dados são usados apenas para viabilizar esta compra. Veja nossa
+                    <a href="privacidade.html" target="_blank" class="text-blue-400 hover:text-blue-300 underline">Política de Privacidade</a>.
+                </p>
+            </form>
         </div>
     </div>
-</div>
 
-<!-- ============================================================
-     SCRIPTS — ORDEM CRÍTICA
-============================================================ -->
-<script src="config.js"></script>
-<script src="ui.js"></script>
-<script src="auth.js"></script>
-<script src="database.js"></script>
-<script src="dashboard.js"></script>
-<script src="transactions.js"></script>
-<script src="goals.js"></script>
-<script src="planning.js"></script>
-<script src="client.js"></script>
-<script src="app.js"></script>
-<script src="smart-input.js"></script>
-<script src="regras-aprendidas.js"></script>
-<script src="importacao-extrato.js"></script>
-<script src="categoria-personalizada.js"></script>
+    <!-- ========================================
+         ✅ NOVO: BOTÃO VOLTAR AO TOPO
+         Deixa a pessoa confortável pra rolar bastante a
+         vitrine sem medo de "se perder" lá embaixo.
+         ======================================== -->
+    <button id="back-to-top" aria-label="Voltar ao topo">
+        <i data-lucide="arrow-up"></i>
+    </button>
 
+    
 
-  <script src="notifications.js"></script>
+    <!-- ========================================
+         SCRIPTS — ORDEM CRÍTICA
+         ======================================== -->
+    <script src="config.js?v=3"></script>
+    <script src="storage.js?v=2"></script>
+    <script src="wrapper.js?v=1"></script>
+    <script src="auth.js?v=8"></script>
+    <script src="store-status.js?v=2"></script>
+    <script src="cart.js?v=3"></script>
+    <script src="products.js?v=9"></script>
+    <script src="ads.js?v=6"></script>
+    <script src="bi.js?v=9"></script>
+    <script src="navigation.js?v=5"></script>
+    <script src="tenants.js?v=6"></script>
+    <script src="orders.js?v=5"></script>
+    <script src="order-management.js?v=2"></script>
+    <script src="admin-warnings.js?v=2"></script>
+    <script src="vendor-settings.js?v=5"></script>
+    <script src="notifications.js?v=1"></script>
+    <script src="moderation.js?v=1"></script>
+    <script src="restock-alerts.js?v=1"></script>
+    <!-- ✅ FIX: o arquivo real do projeto se chama "pwa.js" — o nome
+         "pwa-install.js" que estava aqui não bate com nenhum arquivo,
+         o que causaria um 404 silencioso. -->
+    <script src="pwa.js?v=2"></script>
+    <script src="app.js?v=5"></script>
+    <script src="theme-toggle.js?v=2"></script>
+
+    <!-- Preview em tempo real do anúncio texto -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            document.addEventListener('input', (e) => {
+                if (e.target.id === 'ad-text-title') {
+                    const el = document.getElementById('preview-title');
+                    if (el) el.innerText = e.target.value || 'TÍTULO DO ANÚNCIO';
+                }
+                if (e.target.id === 'ad-text-content') {
+                    const el = document.getElementById('preview-text');
+                    if (el) el.innerText = e.target.value || 'Conteúdo do seu anúncio aparecerá aqui';
+                }
+            });
+
+            function patchCart() {
+                if (!window.APP || !window.APP.cart) { setTimeout(patchCart, 200); return; }
+                const orig = window.APP.cart.updateUI.bind(window.APP.cart);
+                window.APP.cart.updateUI = function() {
+                    orig();
+                    const bnav = document.getElementById('bnav-cart-count');
+                    if (bnav) bnav.textContent = this.items.length;
+                };
+            }
+            patchCart();
+
+            // ✅ NOVO: botão flutuante "voltar ao topo" — aparece só
+            // depois que a pessoa já rolou um pouco a página.
+            const backToTop = document.getElementById('back-to-top');
+            if (backToTop) {
+                window.addEventListener('scroll', () => {
+                    backToTop.classList.toggle('show', window.scrollY > 480);
+                }, { passive: true });
+
+                backToTop.addEventListener('click', () => {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                });
+            }
+        });
+    </script>
+
 </body>
 </html>

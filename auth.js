@@ -60,6 +60,15 @@ const AuthModule = (() => {
          * 3. Qualquer outro caso → cliente novo (onboarding pendente)
          */
         async determineUserRole(userId, email) {
+            // Guarda contra logins OAuth onde email pode ser null/undefined
+            // (ex: login com Apple que permite ocultar o email)
+            if (!email) {
+                userRole        = 'client';
+                currentClientId = userId;
+                console.warn('⚠️ determineUserRole: email ausente — tratado como cliente novo.');
+                return userRole;
+            }
+
             // Regra 1: email admin hardcoded
             if (email === CONFIG.ADMIN.EMAIL) {
                 userRole        = 'admin';

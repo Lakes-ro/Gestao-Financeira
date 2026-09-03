@@ -4,8 +4,18 @@
  * Expõe globals usados pelos sub-módulos:
  *   currentAdmin, allClientes, loadAllClientes,
  *   openModal, closeModal, showToast,
- *   formatCurrency, formatDate
+ *   formatCurrency, formatDate,
+ *   mascararTexto, renderIdentidadeCliente, toggleIdentidadeCliente
  * Padrão: script global (sem import/export ES module).
+ *
+ * ATUALIZAÇÃO — PRIVACIDADE (OLHINHO 👁️):
+ * Adicionados mascararTexto()/renderIdentidadeCliente()/
+ * toggleIdentidadeCliente() — usados por clientes.js e dashboards.js
+ * para ocultar nome/email do cliente por padrão (mostrando só um
+ * texto mascarado tipo "R••••• H••••"), com um botão de olho que
+ * revela/oculta o dado real por card, sem precisar de nova consulta
+ * ao banco (o dado real já veio, só fica escondido visualmente até o
+ * clique).
  *
  * NOTA: este ficheiro só deve ser incluído em admin.html.
  * Foi adicionada uma guarda no final (verifica document.body
@@ -53,6 +63,83 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('pt-BR', {
     day: '2-digit', month: '2-digit', year: 'numeric'
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+// PRIVACIDADE — OCULTAR NOME/EMAIL DO CLIENTE (OLHINHO)
+// ══════════════════════════════════════════════════════════════
+/**
+ * Mascara um texto mantendo só o primeiro caractere de cada palavra
+ * visível (ex: "Roger Hugo" -> "R•••• H•••"). Para email, mantém só o
+ * primeiro caractere do usuário e oculta todo o domínio, pra não dar
+ * nenhuma pista real (ex: "roger@gmail.com" -> "r••••@••••••.com").
+ */
+function mascararTexto(texto) {
+  if (!texto) return '';
+
+  if (texto.includes('@')) {
+    const [usuario] = texto.split('@');
+    const primeira  = usuario.charAt(0) || '•';
+    return `${primeira}${'•'.repeat(Math.max(3, usuario.length - 1))}@••••••.com`;
+  }
+
+  return texto
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map(p => p.charAt(0) + '•'.repeat(Math.max(2, p.length - 1)))
+    .join(' ');
+}
+
+/**
+ * Gera o bloco HTML de "identidade" (nome + email) de um cliente já
+ * com o olhinho de privacidade. `extraClass` é opcional, usado quando
+ * o bloco precisa se comportar como flex:1 dentro de um
+ * .card-header-row (ver dashboards.js).
+ */
+function renderIdentidadeCliente(nome, email, extraClass = '') {
+  const nomeSeguro  = (nome  || '').replace(/"/g, '&quot;');
+  const emailSeguro = (email || '').replace(/"/g, '&quot;');
+  const temEmail    = !!email;
+
+  return `
+    <div class="client-privacy-row ${extraClass}">
+      <div class="client-identity" data-nome="${nomeSeguro}" data-email="${emailSeguro}">
+        <p class="card-name client-identity__nome">${mascararTexto(nome)}</p>
+        <p class="card-sub client-identity__email">${temEmail ? mascararTexto(email) : 'Sem email'}</p>
+      </div>
+      <button type="button" class="btn-eye-toggle" title="Mostrar dados" onclick="toggleIdentidadeCliente(this)">👁️</button>
+    </div>
+  `;
+}
+
+/**
+ * Alterna entre mostrar o nome/email REAIS (vindos dos data-attributes,
+ * já carregados junto com o card — não faz nova consulta) e a versão
+ * mascarada. Chamado pelo onclick do botão de olho gerado acima.
+ */
+function toggleIdentidadeCliente(btn) {
+  const linha = btn.closest('.client-privacy-row');
+  const bloco = linha?.querySelector('.client-identity');
+  if (!bloco) return;
+
+  const revelado = bloco.classList.toggle('revelado');
+  const nomeEl   = bloco.querySelector('.client-identity__nome');
+  const emailEl  = bloco.querySelector('.client-identity__email');
+  const nomeReal  = bloco.dataset.nome  || '—';
+  const emailReal = bloco.dataset.email || '';
+
+  if (revelado) {
+    nomeEl.textContent  = nomeReal;
+    emailEl.textContent = emailReal || 'Sem email';
+    btn.textContent = '🙈';
+    btn.title = 'Ocultar dados';
+  } else {
+    nomeEl.textContent  = mascararTexto(nomeReal);
+    emailEl.textContent = emailReal ? mascararTexto(emailReal) : 'Sem email';
+    btn.textContent = '👁️';
+    btn.title = 'Mostrar dados';
+  }
 }
 
 async function loadAllClientes() {
@@ -170,12 +257,13 @@ const AdminModule = (() => {
     initLogout();
 
     // Inicia sub-módulos (definidos nos outros scripts)
-    if (typeof initClientes      === 'function') initClientes();
-    if (typeof initCategorias    === 'function') initCategorias();
-    if (typeof initDashboards    === 'function') initDashboards();
-    if (typeof initMetas         === 'function') initMetas();
-    if (typeof initPlanejamentos === 'function') initPlanejamentos();
-    if (typeof initRazonete      === 'function') initRazonete();
+    if (typeof initClientes          === 'function') initClientes();
+    if (typeof initCategorias        === 'function') initCategorias();
+    if (typeof initDashboards        === 'function') initDashboards();
+    if (typeof initMetas             === 'function') initMetas();
+    if (typeof initPlanejamentos     === 'function') initPlanejamentos();
+    if (typeof initRazonete          === 'function') initRazonete();
+    if (typeof initNotificacoesAdmin === 'function') initNotificacoesAdmin();
 
     console.log('✅ Admin inicializado:', currentAdmin.email);
   }

@@ -237,23 +237,30 @@ async function handleRegister(event) {
     try {
         const user = await AuthModule.register(email, password);
 
-        await supabaseClient.from(CONFIG.TABLES.USUARIOS).insert([{
-            id:            user.id,
-            nome_completo: nome,
-            apelido:       apelido,
-            created_at:    new Date().toISOString()
-        }]);
+        const { error: errUsuario } = await supabaseClient
+            .from(CONFIG.TABLES.USUARIOS).insert([{
+                id:            user.id,
+                nome_completo: nome,
+                apelido:       apelido,
+                created_at:    new Date().toISOString()
+            }]);
+        if (errUsuario) console.warn('⚠️ handleRegister usuarios:', errUsuario.message);
 
-        await supabaseClient.from(CONFIG.TABLES.USUARIOS_PERFIS).insert([{
-            usuario_id: user.id,
-            perfil:     'client',
-            created_at: new Date().toISOString()
-        }]);
+        const { error: errPerfil } = await supabaseClient
+            .from(CONFIG.TABLES.USUARIOS_PERFIS).insert([{
+                usuario_id: user.id,
+                perfil:     'client',
+                created_at: new Date().toISOString()
+            }]);
+        if (errPerfil) console.warn('⚠️ handleRegister usuarios_perfis:', errPerfil.message);
 
         await supabaseClient.rpc('reconciliar_cliente_no_registro', {
             p_nome:  nome,
             p_email: email
         });
+
+        // Marca onboarding concluído — evita o loop de reapresentação
+        try { localStorage.setItem(`mf_ob_${user.id}`, '1'); } catch (_) {}
 
         UIModule.showSuccess(`Conta criada! Bem-vindo, ${apelido}! Faz login agora.`);
         setTimeout(() => UIModule.showScreen('loginScreen'), 2000);
@@ -277,6 +284,13 @@ async function handleRegister(event) {
 async function checkOnboarding(user, role) {
     if (role === 'admin') return false;
 
+    // Cache local — definido por handleRegister e handleOnboarding após
+    // concluir com sucesso. Evita mostrar o onboarding novamente quando
+    // a query na tabela `usuarios` retornar vazio por ausência de policy
+    // de SELECT no RLS (causa mais comum do loop de onboarding).
+    const chaveCache = `mf_ob_${user.id}`;
+    if (localStorage.getItem(chaveCache) === '1') return false;
+
     try {
         const { data } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
@@ -284,8 +298,12 @@ async function checkOnboarding(user, role) {
             .eq('id', user.id)
             .maybeSingle();
 
-        if (!data || !data.nome_completo || !data.apelido) return true;
-        return false;
+        const precisaOnboarding = !data || !data.nome_completo || !data.apelido;
+
+        // Armazena resultado positivo para evitar re-consultas desnecessárias
+        if (!precisaOnboarding) localStorage.setItem(chaveCache, '1');
+
+        return precisaOnboarding;
     } catch (_) {
         return true;
     }
@@ -296,6 +314,14 @@ async function handleOnboarding(event) {
     const nome    = document.getElementById('onboardingNome').value.trim();
     const apelido = document.getElementById('onboardingApelido').value.trim();
     const user    = AuthModule.getUser();
+
+    // Sessão pode expirar durante o onboarding — user seria null e
+    // user.id na linha seguinte geraria TypeError sem mensagem clara.
+    if (!user) {
+        UIModule.showError('Sessão expirada. Por favor, faça login novamente.');
+        UIModule.showScreen('loginScreen');
+        return;
+    }
 
     if (!nome || !apelido) { UIModule.showError('Preenche todos os campos'); return; }
 
@@ -345,6 +371,10 @@ async function handleOnboarding(event) {
             if (rpcError) throw rpcError;
         }
 
+        // Marca onboarding concluído antes de navegar — evita o loop
+        // de re-apresentação quando SELECT em usuarios falha por RLS
+        try { localStorage.setItem(`mf_ob_${user.id}`, '1'); } catch (_) {}
+
         UIModule.showSuccess(`Bem-vindo, ${apelido}! 🎉`);
 
         ClientModule.setClientId(user.id);
@@ -389,12 +419,18 @@ async function loadClientDashboard() {
         const clientId = ClientModule.getClientId();
         const user     = AuthModule.getUser();
 
-        try {
-            const { data: usuario } = await supabaseClient
-                .from(CONFIG.TABLES.USUARIOS).select('apelido').eq('id', user.id).maybeSingle();
-            UIModule.setText('clientNameDisplay', usuario?.apelido || user?.email?.split('@')[0] || 'Cliente');
-        } catch (_) {
-            UIModule.setText('clientNameDisplay', user?.email?.split('@')[0] || 'Cliente');
+        // Não rebusca o apelido a cada refresh — routeByRole e handleOnboarding
+        // já definiram clientNameDisplay. Só preenche se ainda estiver vazio
+        // (ex: restauração de sessão via checkSession).
+        const exibicaoAtual = document.getElementById('clientNameDisplay')?.textContent?.trim();
+        if (!exibicaoAtual) {
+            try {
+                const { data: usuario } = await supabaseClient
+                    .from(CONFIG.TABLES.USUARIOS).select('apelido').eq('id', user.id).maybeSingle();
+                UIModule.setText('clientNameDisplay', usuario?.apelido || user?.email?.split('@')[0] || 'Cliente');
+            } catch (_) {
+                UIModule.setText('clientNameDisplay', user?.email?.split('@')[0] || 'Cliente');
+            }
         }
 
         await DashboardModule.renderClientDashboard(clientId, getFiltroDashboardAtual());
@@ -563,6 +599,19 @@ function initHistoryFilters() {
     selectTipo?.addEventListener('change', renderClientTransactionHistory);
 }
 
+// Escapa caracteres HTML para evitar XSS em conteúdo vindo do banco.
+// Usada por loadClientPlanning onde planejamentos do admin são inseridos
+// via innerHTML — seguro mesmo que o banco seja comprometido.
+function escaparHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 async function loadClientPlanning() {
     try {
         const clientId  = ClientModule.getClientId();
@@ -573,11 +622,12 @@ async function loadClientPlanning() {
             if (!plannings || plannings.length === 0) {
                 container.innerHTML = '<p class="empty-state">Aguardando planejamento do administrador...</p>';
             } else {
+                // escaparHtml() previne XSS — títulos/recomendações vêm do banco
                 container.innerHTML = plannings.map(p => `
                     <div class="card" style="margin-bottom: 15px;">
-                        <h3>${p.titulo}</h3>
-                        ${p.recomendacoes ? `<p style="color:#a0a0b0; margin-top:10px;">${p.recomendacoes}</p>` : ''}
-                        ${p.detalhes      ? `<p style="color:#6b7c8f; margin-top:8px; font-size:13px;">${p.detalhes}</p>` : ''}
+                        <h3>${escaparHtml(p.titulo)}</h3>
+                        ${p.recomendacoes ? `<p style="color:#a0a0b0; margin-top:10px;">${escaparHtml(p.recomendacoes)}</p>` : ''}
+                        ${p.detalhes      ? `<p style="color:#6b7c8f; margin-top:8px; font-size:13px;">${escaparHtml(p.detalhes)}</p>` : ''}
                     </div>
                 `).join('');
             }
@@ -861,8 +911,12 @@ async function handleAddTransaction(event) {
     const descricao   = document.getElementById('transDescription').value;
     const metaId      = document.getElementById('transMeta')?.value || null;
 
-    if (!categoriaId) { UIModule.showError('Seleciona uma categoria'); return; }
-    if (!data)         { UIModule.showError('Data é obrigatória'); return; }
+    if (!categoriaId)         { UIModule.showError('Seleciona uma categoria'); return; }
+    if (!data)                { UIModule.showError('Data é obrigatória'); return; }
+    if (!valor || valor <= 0) { UIModule.showError('Informa um valor válido'); return; }
+
+    const btn = event.target.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Registando...'; }
 
     try {
         const categorias = await DatabaseModule.getCategorias();
@@ -874,9 +928,9 @@ async function handleAddTransaction(event) {
             categoria_id:     categoriaId,
             valor,
             data_competencia: data,
-            descricao,
-            tipo: cat.tipo,
-            meta_id: cat.grupo === 'investimento' ? (metaId || null) : null
+            descricao:        descricao.trim() || null,   // trim + null se vazio
+            tipo:             cat.tipo,
+            meta_id:          cat.grupo === 'investimento' ? (metaId || null) : null
         });
 
         if (typeof RegrasAprendidasModule !== 'undefined' && descricao.trim()) {
@@ -906,6 +960,8 @@ async function handleAddTransaction(event) {
         await loadClientDashboard();
     } catch (error) {
         UIModule.showError(error.message || 'Erro ao registar transação');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Registar'; }
     }
 }
 
@@ -971,21 +1027,49 @@ async function handleAddMeta(event) {
     const nome     = document.getElementById('metaName').value.trim();
     const valor    = parseFloat(document.getElementById('metaValue').value);
 
+    if (!nome)                { UIModule.showError('Informe o nome da meta.'); return; }
+    if (isNaN(valor) || valor < 0) { UIModule.showError('Informe um valor válido para a meta.'); return; }
+
+    const btn = event.target.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Criando...'; }
+
     try {
         await ClientModule.addGoal({ client_id: clientId, nome, valor_necessario: valor, valor_economizado: 0 });
         event.target.reset();
         UIModule.showSuccess('Meta criada!');
         await loadClientDashboard();
-    } catch (_) { UIModule.showError('Erro ao criar meta'); }
+    } catch (_) {
+        UIModule.showError('Erro ao criar meta');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Criar Meta'; }
+    }
 }
 
 // ── PERFIL CLIENTE ──
 
-function showClientProfile() {
+async function showClientProfile() {
     const user = AuthModule.getUser();
-    UIModule.setText('profileClientName', user?.user_metadata?.name || user?.email || 'Cliente');
-    UIModule.setText('profileClientEmail', user?.email || '');
     UIModule.openModal('clientProfileModal');
+
+    // user_metadata.name nunca é definido no nosso fluxo de registro —
+    // o apelido real fica em usuarios.apelido. Buscamos aqui para
+    // mostrar o nome correto no modal de perfil.
+    let nomeExibido = user?.email || 'Cliente';
+    try {
+        const { data: usuario } = await supabaseClient
+            .from(CONFIG.TABLES.USUARIOS)
+            .select('nome_completo, apelido')
+            .eq('id', user.id)
+            .maybeSingle();
+        if (usuario?.apelido || usuario?.nome_completo) {
+            nomeExibido = usuario.apelido
+                ? `${usuario.apelido} (${usuario.nome_completo || ''})`
+                : usuario.nome_completo;
+        }
+    } catch (_) { /* mantém fallback do email */ }
+
+    UIModule.setText('profileClientName', nomeExibido.trim());
+    UIModule.setText('profileClientEmail', user?.email || '');
 }
 
 // ================================================

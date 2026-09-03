@@ -89,24 +89,22 @@ const DatabaseModule = (() => {
             return true;
         },
 
-        async getClientComments(clientId) {
-            const { data, error } = await supabaseClient
-                .from(CONFIG.TABLES.CLIENTES)
-                .select('comentarios')
-                .eq('id', clientId)
-                .single();
-            if (error) throw error;
-            return data?.comentarios || '';
+        /**
+         * @deprecated A coluna `clientes.comentarios` foi removida.
+         * Comentários vivem agora em `comentarios_clientes` (clientes.js).
+         * Mantido aqui para não quebrar chamadas legadas — retorna string vazia.
+         */
+        async getClientComments(_clientId) {
+            console.warn('⚠️ getClientComments: método legado, coluna clientes.comentarios não existe mais.');
+            return '';
         },
 
-        async saveClientComments(clientId, comments) {
-            const { data, error } = await supabaseClient
-                .from(CONFIG.TABLES.CLIENTES)
-                .update({ comentarios: comments })
-                .eq('id', clientId)
-                .select();
-            if (error) throw error;
-            return data?.[0];
+        /**
+         * @deprecated Ver getClientComments acima.
+         */
+        async saveClientComments(_clientId, _comments) {
+            console.warn('⚠️ saveClientComments: método legado.');
+            return null;
         },
 
         async getTransactionsByClient(clientId) {

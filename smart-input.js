@@ -125,7 +125,49 @@ const GRUPOS_SEMANTICOS_CATEGORIA = [
             'oficina', 'mecanico', 'revisao do carro', 'troca de oleo',
             'pneu', 'alinhamento', 'balanceamento', 'bateria do carro'
         ]
+    },
+    // ── NOVO: Reembolso / Estorno Recebido ───────────────────
+    // grupo: 'transferencia' — NÃO conta em totalReceitas.
+    // Reembolso é a devolução de uma despesa já contabilizada; tratá-lo
+    // como receita inflaria o total de entradas e distorceria a taxa de
+    // poupança e o DRE. Posicionado ANTES do bloco de Doações para que
+    // "reembolso de doação" bata aqui e não na categoria de doação.
+    {
+        categoria: 'Reembolso / Estorno Recebido',
+        tipo: 'receita',
+        grupo: 'transferencia',
+        termos: [
+            'reembolso', 'estorno recebido', 'devolucao recebida',
+            'ressarcimento', 'reembolso de despesa',
+            'reembolso de viagem', 'reembolso da empresa',
+            'estorno de compra', 'chargeback', 'reembolso de seguro'
+        ]
+    },
+    // ─────────────────────────────────────────────────────────
+
+    // ── NOVO: Doações e Contribuições Religiosas ──────────────
+    // Cobre dízimo, ofertas, contribuições para igrejas e causas
+    // religiosas. Os termos são intencionalmente específicos para não
+    // colidir com "doação" genérica (ex: doação de roupa, doação de
+    // sangue), que cai na categoria "Presentes e Doações".
+    // O nome canônico 'Doações / Contribuições Religiosas' precisa
+    // bater (por substring) com o nome real cadastrado no banco.
+    {
+        categoria: 'Doações / Contribuições Religiosas',
+        tipo: 'despesa',
+        grupo: 'estilo_de_vida',
+        termos: [
+            'dizimo', 'dizimo da igreja',
+            'oferta da igreja', 'oferta religiosa',
+            'oferta missionaria', 'oferta de servico',
+            'contribuicao religiosa', 'contribuicao da igreja',
+            'doacao para a igreja', 'doacao religiosa',
+            'coleta da igreja', 'coleta de oferta',
+            'primicia', 'primicias',
+            'fundo de missoes', 'missoes evangelicas'
+        ]
     }
+    // ─────────────────────────────────────────────────────────
 ];
 
 /**
@@ -262,6 +304,19 @@ const REGRAS_CLASSIFICACAO_LOCAL = [
     [/streaming|netflix|spotify|assinatura/i,                        'despesa', 'Streaming e Assinaturas'],
     [/viagem|hotel|passagem|airbnb/i,                                'despesa', 'Viagens'],
     [/academia|personal trainer|crossfit|pilates/i,                  'despesa', 'Academia'],
+
+    // Reembolso/estorno é devolução de despesa já contabilizada — vai
+    // para 'Reembolso / Estorno Recebido' (grupo: transferencia, não
+    // infla totalReceitas). Fica ANTES de "presente|doacao" para que
+    // "reembolso de doação" bata aqui, não na categoria genérica.
+    [/reembolso|estorno\s+recebido|devolu[çc][aã]o\s+recebida|ressarcimento|chargeback/i,
+                                                                     'receita', 'Reembolso / Estorno Recebido'],
+
+    // Dízimo e contribuições religiosas — ANTES de "presente|doacao"
+    // para que "doação para a igreja" não caia na regra genérica.
+    [/d[íi]zimo|oferta\s+(?:da\s+)?(?:igreja|religi[oó]sa|missionár[ia])|contribui[çc][aã]o\s+religi[oó]sa|doa[çc][aã]o\s+(?:para\s+(?:a\s+)?)?(?:igreja)|prim[íi]ci[ao]\b/i,
+                                                                     'despesa', 'Doações / Contribuições Religiosas'],
+
     [/presente|doacao|caridade/i,                                    'despesa', 'Presentes e Doações'],
     [/celular|smartphone|notebook|tablet|fone de ouvido|video ?game/i, 'despesa', 'Eletrônicos e Gadgets'],
     [/manicure|pedicure|unha|maquiagem|sobrancelha|estetica/i,      'despesa', 'Salão de Beleza e Estética'],
