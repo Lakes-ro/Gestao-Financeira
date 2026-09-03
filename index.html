@@ -4,25 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MentorFin</title>
-    <link rel="stylesheet" href="style.css">
     <link rel="icon" type="image/png" href="logo.png">
+    <link rel="stylesheet" href="style.css">
     <!-- Anti-flicker: o body começa com visibility:hidden (via CSS).
          Se o JS demorar mais de 2s, o ui.js revela automaticamente.
          Garantia extra: nunca mostra sidebar antes do login. -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js"></script>
-    <!-- ══ PWA — instalação como app ════════════════════════════
-         manifest.json define nome/ícone/cor que o Android/iOS usam
-         ao instalar via "Adicionar à tela inicial".
-         apple-mobile-web-app-* cobrem Safari/iOS que ignora o manifest.
-    ═══════════════════════════════════════════════════════════ -->
     <link rel="manifest" href="manifest.json">
-    <meta name="application-name"                content="MentorFin">
-    <meta name="apple-mobile-web-app-capable"    content="yes">
-    <meta name="apple-mobile-web-app-title"      content="MentorFin">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="mobile-web-app-capable"          content="yes">
-    <meta name="theme-color"                     content="#6495ff">
+    <meta name="application-name" content="MentorFin">
 </head>
 <body>
 
@@ -64,15 +54,15 @@
             <form onsubmit="handleRegister(event)">
                 <div class="form-group">
                     <label>Nome Completo</label>
-                    <input type="text" id="registerNome" placeholder="Ex: Fulano da silva" required>
+                    <input type="text" id="registerNome" placeholder="Ex: Vinícius Viana" required>
                 </div>
                 <div class="form-group">
                     <label>Como quer ser chamado? (Apelido)</label>
-                    <input type="text" id="registerApelido" placeholder="Ex: Fulanin" required>
+                    <input type="text" id="registerApelido" placeholder="Ex: Vini" required>
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" id="registerEmail" placeholder="fulanin258@email.com" required>
+                    <input type="email" id="registerEmail" placeholder="seu@email.com" required>
                 </div>
                 <div class="form-group">
                     <label>Senha</label>
@@ -102,11 +92,11 @@
             <form onsubmit="handleOnboarding(event)">
                 <div class="form-group">
                     <label>Nome Completo</label>
-                    <input type="text" id="onboardingNome" placeholder="Ex: Flavin" required>
+                    <input type="text" id="onboardingNome" placeholder="Ex: Roger Hugo Santos" required>
                 </div>
                 <div class="form-group">
                     <label>Como quer ser chamado? (Apelido)</label>
-                    <input type="text" id="onboardingApelido" placeholder="Ex: Seu apelido" required>
+                    <input type="text" id="onboardingApelido" placeholder="Ex: Roger" required>
                 </div>
                 <button type="submit" class="btn btn--primary" style="margin-top:8px;">Continuar →</button>
             </form>
@@ -120,7 +110,7 @@
     <div id="clientScreen" class="screen layout-wrapper">
         <aside class="sidebar">
             <div class="sidebar__header">
-                <p style="font-family:'Courier New',monospace;font-size:1.1rem;font-weight:800;color:var(--accent);letter-spacing:.05em;margin-bottom:0;">MentorFin</p>
+                <h2>📊 Menu</h2>
             </div>
             <nav class="sidebar__nav">
                 <button class="sidebar__nav-item active"
@@ -545,7 +535,6 @@
 <script src="regras-aprendidas.js"></script>
 <script src="importacao-extrato.js"></script>
 <script src="categoria-personalizada.js"></script>
-
 
   <script src="notifications.js"></script>
 </body>
