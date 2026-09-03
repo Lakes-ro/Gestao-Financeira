@@ -133,8 +133,8 @@ function renderMetasFiltradas() {
     return `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <p class="card-name">${meta.nome}</p>
-          <span class="meta-cliente-badge">${cliente?.nome || '—'}</span>
+          <p class="card-name">${escaparHtml(meta.nome || '')}</p>
+          <span class="meta-cliente-badge">${escaparHtml(cliente?.nome || '—')}</span>
         </div>
         <div class="meta-stats">
           <div>
