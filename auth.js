@@ -6,6 +6,24 @@
  * e navegação entre páginas. checkSession() foi reescrito para
  * de facto consultar getSession() e restaurar o utilizador,
  * em vez de retornar null sempre.
+ *
+ * ATUALIZAÇÃO — METADADOS NO CADASTRO (evita pedir nome/apelido
+ * duas vezes): register() agora aceita um segundo argumento
+ * `metadata` (ex: { nome_completo, apelido }), passado como
+ * `options.data` do signUp(). Isso grava essa informação DIRETO na
+ * conta do Supabase Auth — não numa tabela separada — então ela:
+ *   1. Não depende de nenhuma policy de RLS pra ser lida depois.
+ *   2. Fica disponível na sessão em QUALQUER dispositivo, mesmo se a
+ *      confirmação de e-mail acontecer num aparelho diferente de
+ *      onde a conta foi criada.
+ *   3. Não exige nenhuma chamada de rede extra pra ser consultada —
+ *      já vem junto com `session.user.user_metadata`.
+ * Isso resolve a causa raiz do onboarding pedir Nome/Apelido de novo
+ * depois da confirmação de e-mail (ver checkOnboarding em app.js).
+ *
+ * Também adicionado atualizarMetadados(), usado pelo onboarding de
+ * fallback (handleOnboarding em app.js) pra fazer o "backfill" desses
+ * metadados em contas antigas que ainda não os têm.
  */
 
 const AuthModule = (() => {
@@ -133,9 +151,21 @@ const AuthModule = (() => {
             }
         },
 
-        async register(email, password) {
+        /**
+         * @param {string} email
+         * @param {string} password
+         * @param {Object} [metadata] - dados extra gravados DIRETO na
+         *   conta (ex: { nome_completo, apelido }) — ver nota no
+         *   cabeçalho do ficheiro sobre por que isso evita pedir a
+         *   mesma informação duas vezes.
+         */
+        async register(email, password, metadata = {}) {
             try {
-                const { data, error } = await supabaseClient.auth.signUp({ email, password });
+                const { data, error } = await supabaseClient.auth.signUp({
+                    email,
+                    password,
+                    options: { data: metadata }
+                });
 
                 if (error) throw error;
                 if (!data.user) throw new Error('Nenhum utilizador retornado');
@@ -154,6 +184,21 @@ const AuthModule = (() => {
             }
         },
 
+        /**
+         * Atualiza os metadados da conta já autenticada (ex: backfill
+         * de nome_completo/apelido numa conta antiga que ainda não
+         * tinha isso salvo — ver handleOnboarding em app.js). Diferente
+         * de register(), aqui a pessoa já está logada.
+         */
+        async atualizarMetadados(metadata) {
+            const { data, error } = await supabaseClient.auth.updateUser({ data: metadata });
+            if (error) throw error;
+
+            currentUser = data.user;
+            notifyChange();
+            return data.user;
+        },
+
         async logout() {
             try {
                 await supabaseClient.auth.signOut();
@@ -170,12 +215,13 @@ const AuthModule = (() => {
             return true;
         },
 
-        getUser:     () => currentUser,
-        getUserRole: () => userRole,
-        getClientId: () => currentClientId,
-        isLogged:    () => currentUser !== null,
-        isAdmin:     () => userRole === 'admin',
-        isClient:    () => userRole === 'client'
+        getUser:         () => currentUser,
+        getUserRole:     () => userRole,
+        getClientId:     () => currentClientId,
+        getUserMetadata: () => currentUser?.user_metadata || {},
+        isLogged:        () => currentUser !== null,
+        isAdmin:         () => userRole === 'admin',
+        isClient:        () => userRole === 'client'
     };
 })();
 
