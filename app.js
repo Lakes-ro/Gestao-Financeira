@@ -34,33 +34,6 @@
  * toggleHistoricoCard() (botão-cabeçalho, reaproveitando as classes
  * genéricas .btn-collapse/.collapse-icon/.collapse-content que já
  * existiam em style.css sem uso).
- *
- * ═══════════════════════════════════════════════════════════════
- * ATUALIZAÇÃO — CADASTRO SEM PEDIDO DUPLICADO E SEM ESPERA À TOA:
- * ═══════════════════════════════════════════════════════════════
- * PROBLEMA QUE ISSO RESOLVE: o formulário de "Criar Conta" pede
- * Nome Completo + Apelido. Se a confirmação de e-mail estiver
- * pendente no momento do cadastro, `signUp()` NÃO devolve uma sessão
- * ativa — e os INSERTs em `usuarios`/`usuarios_perfis` (que dependem
- * de `auth.uid()` via RLS) falhavam OU ficavam esperando à toa antes
- * de falhar. Resultado: quando a pessoa confirmava o e-mail e fazia
- * login (às vezes noutro aparelho), a tabela `usuarios` estava vazia
- * e o onboardingScreen pedia Nome/Apelido de novo.
- *
- * CORREÇÃO: handleRegister() agora manda nome_completo/apelido como
- * METADADOS da própria conta (AuthModule.register(email, senha,
- * metadata) → ver auth.js), que não dependem de sessão nem de RLS
- * pra existir. checkOnboarding() passa a checar esses metadados
- * PRIMEIRO — leitura instantânea, sem consulta nenhuma — e só cai no
- * fallback de consultar a tabela `usuarios` para contas antigas
- * criadas antes desta atualização. Os INSERTs de sincronização
- * (usuarios/usuarios_perfis/RPC) agora rodam EM PARALELO (Promise.
- * allSettled) em vez de em sequência, e só quando já existe sessão
- * ativa — nunca mais espera à toa por chamadas destinadas a falhar.
- * Se a confirmação de e-mail já veio com sessão ativa (opção
- * "Confirm email" desligada no Supabase), o cadastro agora entra
- * DIRETO no painel — sem pedir login de novo com o mesmo e-mail/senha
- * que a pessoa acabou de digitar.
  */
 
 // ================================================
@@ -111,65 +84,6 @@ function switchClientView(sectionId, event) {
 }
 
 // ================================================
-// SINCRONIZAÇÃO DE DADOS DO USUÁRIO (usuarios/usuarios_perfis)
-// ================================================
-/**
- * Grava/atualiza a linha de `usuarios` (e garante o perfil 'client'
- * em `usuarios_perfis`) a partir dos metadados da conta — usado tanto
- * no cadastro (quando já há sessão ativa) quanto como auto-cura no
- * primeiro login pós-confirmação de e-mail (quando o cadastro não
- * conseguiu gravar isso na hora por falta de sessão). Nunca lança
- * erro pra fora — cada chamada é best-effort e roda em paralelo via
- * Promise.allSettled, então uma falha aqui nunca trava a navegação
- * nem o cadastro.
- *
- * @param {Object} user - user do Supabase Auth (session.user)
- * @param {string} [nomeFallback] - usado só se user_metadata não tiver nome
- * @param {string} [apelidoFallback] - usado só se user_metadata não tiver apelido
- */
-async function sincronizarDadosDoUsuario(user, nomeFallback, apelidoFallback) {
-    const nome    = user.user_metadata?.nome_completo || nomeFallback || '';
-    const apelido = user.user_metadata?.apelido        || apelidoFallback || '';
-
-    if (!nome && !apelido) return; // nada pra sincronizar ainda
-
-    const resultados = await Promise.allSettled([
-        supabaseClient.from(CONFIG.TABLES.USUARIOS).upsert({
-            id:            user.id,
-            nome_completo: nome,
-            apelido:       apelido,
-            created_at:    new Date().toISOString()
-        }),
-        (async () => {
-            const { data: jaTemPerfil } = await supabaseClient
-                .from(CONFIG.TABLES.USUARIOS_PERFIS)
-                .select('id')
-                .eq('usuario_id', user.id)
-                .maybeSingle();
-
-            if (!jaTemPerfil) {
-                return supabaseClient.from(CONFIG.TABLES.USUARIOS_PERFIS).insert([{
-                    usuario_id: user.id,
-                    perfil:     'client',
-                    created_at: new Date().toISOString()
-                }]);
-            }
-        })(),
-        supabaseClient.rpc('reconciliar_cliente_no_registro', {
-            p_nome:  nome || user.email?.split('@')[0] || 'Cliente',
-            p_email: user.email
-        })
-    ]);
-
-    resultados.forEach((r, i) => {
-        if (r.status === 'rejected' || r.value?.error) {
-            const rotulo = ['usuarios', 'usuarios_perfis', 'reconciliar_cliente'][i];
-            console.warn(`⚠️ sincronizarDadosDoUsuario (${rotulo}):`, r.reason?.message || r.value?.error?.message);
-        }
-    });
-}
-
-// ================================================
 // ROTEAMENTO PÓS-LOGIN (RBAC)
 // ================================================
 
@@ -188,10 +102,13 @@ async function routeByRole(user, role) {
     await garantirClienteExiste(user);
 
     try {
-        const nomeExibicao = user.user_metadata?.apelido
-            || (await supabaseClient.from(CONFIG.TABLES.USUARIOS).select('apelido').eq('id', user.id).maybeSingle()).data?.apelido;
-        if (nomeExibicao) {
-            UIModule.setText('clientNameDisplay', nomeExibicao);
+        const { data: usuario } = await supabaseClient
+            .from(CONFIG.TABLES.USUARIOS)
+            .select('apelido')
+            .eq('id', user.id)
+            .maybeSingle();
+        if (usuario?.apelido) {
+            UIModule.setText('clientNameDisplay', usuario.apelido);
         }
     } catch (_) {}
 
@@ -199,11 +116,6 @@ async function routeByRole(user, role) {
     await populateCategorySelect();
     UIModule.showScreen('clientScreen');
     await loadClientDashboard();
-
-    // Inicializa lembretes in-app e Web Push após o dashboard carregar
-    if (typeof NotificacoesModule !== 'undefined') {
-        NotificacoesModule.inicializar(user.id).catch(() => {});
-    }
 }
 
 async function garantirClienteExiste(user) {
@@ -223,13 +135,7 @@ async function garantirClienteExiste(user) {
             .eq('id', user.id)
             .maybeSingle();
 
-        // Preferência: metadados da conta (sempre disponíveis, sem
-        // depender de RLS) -> tabela usuarios -> prefixo do email.
-        const nome = user.user_metadata?.nome_completo
-            || usuario?.nome_completo
-            || usuario?.apelido
-            || user.email?.split('@')[0]
-            || 'Cliente';
+        const nome = usuario?.nome_completo || usuario?.apelido || user.email?.split('@')[0] || 'Cliente';
 
         const { error: rpcError } = await supabaseClient.rpc('reconciliar_cliente_no_registro', {
             p_nome:  nome,
@@ -294,7 +200,7 @@ function showLoginError(msg, extra = '') {
 }
 
 // ================================================
-// CADASTRO — NOME/APELIDO VIRAM METADADOS DA CONTA
+// CADASTRO — USUARIOS + USUARIOS_PERFIS
 // ================================================
 
 async function handleRegister(event) {
@@ -324,51 +230,28 @@ async function handleRegister(event) {
     if (btn) { btn.disabled = true; btn.textContent = 'Criando conta...'; }
 
     try {
-        // Nome e apelido vão DIRETO como metadados da conta — não
-        // dependem de sessão ativa nem de RLS pra existir (ver nota
-        // completa no cabeçalho do ficheiro e em auth.js).
-        const user = await AuthModule.register(email, password, {
+        const user = await AuthModule.register(email, password);
+
+        await supabaseClient.from(CONFIG.TABLES.USUARIOS).insert([{
+            id:            user.id,
             nome_completo: nome,
-            apelido:       apelido
+            apelido:       apelido,
+            created_at:    new Date().toISOString()
+        }]);
+
+        await supabaseClient.from(CONFIG.TABLES.USUARIOS_PERFIS).insert([{
+            usuario_id: user.id,
+            perfil:     'client',
+            created_at: new Date().toISOString()
+        }]);
+
+        await supabaseClient.rpc('reconciliar_cliente_no_registro', {
+            p_nome:  nome,
+            p_email: email
         });
 
-        // Marca onboarding como concluído já aqui — o metadado acima
-        // já é suficiente, mas o cache local evita até uma leitura
-        // desnecessária de session.user numa próxima visita rápida.
-        try { localStorage.setItem(`mf_ob_${user.id}`, '1'); } catch (_) {}
-
-        // Verifica se o cadastro já veio com sessão ativa (acontece
-        // quando "Confirm email" está desligado no Supabase Auth).
-        // Só tenta sincronizar usuarios/usuarios_perfis/clientes se
-        // houver sessão — sem ela, esses INSERTs falhariam por RLS
-        // de qualquer forma, então nem faz sentido esperar por eles.
-        const { data: { session } } = await supabaseClient.auth.getSession();
-
-        if (session) {
-            // Roda em paralelo (Promise.allSettled dentro da função) —
-            // nunca mais espera uma chamada depois da outra à toa.
-            await sincronizarDadosDoUsuario(user, nome, apelido);
-
-            // Sessão já ativa: entra direto no painel, sem pedir login
-            // de novo com o mesmo email/senha que a pessoa já digitou.
-            UIModule.showSuccess(`Conta criada! Bem-vindo, ${apelido}! 🎉`);
-            ClientModule.setClientId(user.id);
-            UIModule.setText('clientNameDisplay', apelido);
-            await populateCategorySelect();
-            UIModule.showScreen('clientScreen');
-            await loadClientDashboard();
-
-            if (typeof NotificacoesModule !== 'undefined') {
-                NotificacoesModule.inicializar(user.id).catch(() => {});
-            }
-        } else {
-            // Confirmação de e-mail pendente — não tem como entrar
-            // direto ainda. A sincronização acontece sozinha no
-            // primeiro login (ver checkOnboarding/garantirClienteExiste),
-            // sem precisar pedir Nome/Apelido de novo.
-            UIModule.showSuccess('Conta criada! Verifica o teu email para confirmar antes de entrar.');
-            setTimeout(() => UIModule.showScreen('loginScreen'), 2500);
-        }
+        UIModule.showSuccess(`Conta criada! Bem-vindo, ${apelido}! Faz login agora.`);
+        setTimeout(() => UIModule.showScreen('loginScreen'), 2000);
 
     } catch (error) {
         const msg = error.message || '';
@@ -383,41 +266,12 @@ async function handleRegister(event) {
 }
 
 // ================================================
-// ONBOARDING — FALLBACK PARA CONTAS SEM METADADOS
+// ONBOARDING — USUARIOS + USUARIOS_PERFIS
 // ================================================
-/**
- * Esta tela só deve aparecer para contas criadas ANTES da atualização
- * de metadados (ver handleRegister acima) — para cadastros novos, o
- * metadado já resolve tudo em checkOnboarding() sem precisar mostrar
- * nada disto. Mantida como rede de segurança (ex: conta muito antiga,
- * ou um caso de borda onde o metadado não veio por algum motivo).
- */
 
 async function checkOnboarding(user, role) {
     if (role === 'admin') return false;
 
-    // 1) Metadados da própria conta (Supabase Auth) — não depende de
-    // consulta nenhuma nem de RLS, funciona igual em qualquer
-    // dispositivo. Esta é a fonte de verdade pra cadastros novos.
-    if (user.user_metadata?.nome_completo && user.user_metadata?.apelido) {
-        try { localStorage.setItem(`mf_ob_${user.id}`, '1'); } catch (_) {}
-
-        // Auto-cura em segundo plano: garante que a tabela `usuarios`
-        // também fica sincronizada, caso o INSERT original no cadastro
-        // tenha falhado por falta de sessão ativa (confirmação de
-        // e-mail pendente na hora). Não bloqueia a navegação.
-        sincronizarDadosDoUsuario(user).catch(() => {});
-
-        return false;
-    }
-
-    // 2) Cache local — evita reconsultar o banco à toa numa sessão
-    // restaurada no MESMO dispositivo onde o onboarding já foi feito.
-    const chaveCache = `mf_ob_${user.id}`;
-    if (localStorage.getItem(chaveCache) === '1') return false;
-
-    // 3) Fallback: consulta a tabela usuarios — só chega até aqui
-    // pra contas criadas ANTES desta atualização (sem metadado ainda).
     try {
         const { data } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
@@ -425,11 +279,8 @@ async function checkOnboarding(user, role) {
             .eq('id', user.id)
             .maybeSingle();
 
-        const precisaOnboarding = !data || !data.nome_completo || !data.apelido;
-
-        if (!precisaOnboarding) localStorage.setItem(chaveCache, '1');
-
-        return precisaOnboarding;
+        if (!data || !data.nome_completo || !data.apelido) return true;
+        return false;
     } catch (_) {
         return true;
     }
@@ -441,26 +292,12 @@ async function handleOnboarding(event) {
     const apelido = document.getElementById('onboardingApelido').value.trim();
     const user    = AuthModule.getUser();
 
-    // Sessão pode expirar durante o onboarding — user seria null e
-    // user.id na linha seguinte geraria TypeError sem mensagem clara.
-    if (!user) {
-        UIModule.showError('Sessão expirada. Por favor, faça login novamente.');
-        UIModule.showScreen('loginScreen');
-        return;
-    }
-
     if (!nome || !apelido) { UIModule.showError('Preenche todos os campos'); return; }
 
     const btn = event.target.querySelector('button[type="submit"]');
     if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
 
     try {
-        // Backfill dos metadados da conta — assim, se esta tela
-        // precisar aparecer de novo por qualquer motivo (cache
-        // limpo, outro dispositivo), da próxima vez o checkOnboarding
-        // já resolve direto pelo metadado, sem perguntar de novo.
-        try { await AuthModule.atualizarMetadados({ nome_completo: nome, apelido }); } catch (_) {}
-
         const { error: usuarioError } = await supabaseClient
             .from(CONFIG.TABLES.USUARIOS)
             .upsert({
@@ -503,10 +340,6 @@ async function handleOnboarding(event) {
             if (rpcError) throw rpcError;
         }
 
-        // Marca onboarding concluído antes de navegar — evita o loop
-        // de re-apresentação quando SELECT em usuarios falha por RLS
-        try { localStorage.setItem(`mf_ob_${user.id}`, '1'); } catch (_) {}
-
         UIModule.showSuccess(`Bem-vindo, ${apelido}! 🎉`);
 
         ClientModule.setClientId(user.id);
@@ -514,11 +347,6 @@ async function handleOnboarding(event) {
         await populateCategorySelect();
         UIModule.showScreen('clientScreen');
         await loadClientDashboard();
-
-        // Inicializa notificações também no primeiro acesso (onboarding)
-        if (typeof NotificacoesModule !== 'undefined') {
-            NotificacoesModule.inicializar(user.id).catch(() => {});
-        }
     } catch (error) {
         console.error('❌ Erro em handleOnboarding:', error);
         UIModule.showError(error.message || 'Erro ao salvar perfil');
@@ -551,23 +379,12 @@ async function loadClientDashboard() {
         const clientId = ClientModule.getClientId();
         const user     = AuthModule.getUser();
 
-        // Não rebusca o apelido a cada refresh — routeByRole e handleOnboarding
-        // já definiram clientNameDisplay. Só preenche se ainda estiver vazio
-        // (ex: restauração de sessão via checkSession).
-        const exibicaoAtual = document.getElementById('clientNameDisplay')?.textContent?.trim();
-        if (!exibicaoAtual) {
-            const apelidoMetadata = user?.user_metadata?.apelido;
-            if (apelidoMetadata) {
-                UIModule.setText('clientNameDisplay', apelidoMetadata);
-            } else {
-                try {
-                    const { data: usuario } = await supabaseClient
-                        .from(CONFIG.TABLES.USUARIOS).select('apelido').eq('id', user.id).maybeSingle();
-                    UIModule.setText('clientNameDisplay', usuario?.apelido || user?.email?.split('@')[0] || 'Cliente');
-                } catch (_) {
-                    UIModule.setText('clientNameDisplay', user?.email?.split('@')[0] || 'Cliente');
-                }
-            }
+        try {
+            const { data: usuario } = await supabaseClient
+                .from(CONFIG.TABLES.USUARIOS).select('apelido').eq('id', user.id).maybeSingle();
+            UIModule.setText('clientNameDisplay', usuario?.apelido || user?.email?.split('@')[0] || 'Cliente');
+        } catch (_) {
+            UIModule.setText('clientNameDisplay', user?.email?.split('@')[0] || 'Cliente');
         }
 
         await DashboardModule.renderClientDashboard(clientId, getFiltroDashboardAtual());
@@ -736,19 +553,6 @@ function initHistoryFilters() {
     selectTipo?.addEventListener('change', renderClientTransactionHistory);
 }
 
-// Escapa caracteres HTML para evitar XSS em conteúdo vindo do banco.
-// Usada por loadClientPlanning onde planejamentos do admin são inseridos
-// via innerHTML — seguro mesmo que o banco seja comprometido.
-function escaparHtml(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
 async function loadClientPlanning() {
     try {
         const clientId  = ClientModule.getClientId();
@@ -759,12 +563,11 @@ async function loadClientPlanning() {
             if (!plannings || plannings.length === 0) {
                 container.innerHTML = '<p class="empty-state">Aguardando planejamento do administrador...</p>';
             } else {
-                // escaparHtml() previne XSS — títulos/recomendações vêm do banco
                 container.innerHTML = plannings.map(p => `
                     <div class="card" style="margin-bottom: 15px;">
-                        <h3>${escaparHtml(p.titulo)}</h3>
-                        ${p.recomendacoes ? `<p style="color:#a0a0b0; margin-top:10px;">${escaparHtml(p.recomendacoes)}</p>` : ''}
-                        ${p.detalhes      ? `<p style="color:#6b7c8f; margin-top:8px; font-size:13px;">${escaparHtml(p.detalhes)}</p>` : ''}
+                        <h3>${p.titulo}</h3>
+                        ${p.recomendacoes ? `<p style="color:#a0a0b0; margin-top:10px;">${p.recomendacoes}</p>` : ''}
+                        ${p.detalhes      ? `<p style="color:#6b7c8f; margin-top:8px; font-size:13px;">${p.detalhes}</p>` : ''}
                     </div>
                 `).join('');
             }
@@ -1048,12 +851,8 @@ async function handleAddTransaction(event) {
     const descricao   = document.getElementById('transDescription').value;
     const metaId      = document.getElementById('transMeta')?.value || null;
 
-    if (!categoriaId)         { UIModule.showError('Seleciona uma categoria'); return; }
-    if (!data)                { UIModule.showError('Data é obrigatória'); return; }
-    if (!valor || valor <= 0) { UIModule.showError('Informa um valor válido'); return; }
-
-    const btn = event.target.querySelector('button[type="submit"]');
-    if (btn) { btn.disabled = true; btn.textContent = 'Registando...'; }
+    if (!categoriaId) { UIModule.showError('Seleciona uma categoria'); return; }
+    if (!data)         { UIModule.showError('Data é obrigatória'); return; }
 
     try {
         const categorias = await DatabaseModule.getCategorias();
@@ -1065,9 +864,9 @@ async function handleAddTransaction(event) {
             categoria_id:     categoriaId,
             valor,
             data_competencia: data,
-            descricao:        descricao.trim() || null,   // trim + null se vazio
-            tipo:             cat.tipo,
-            meta_id:          cat.grupo === 'investimento' ? (metaId || null) : null
+            descricao,
+            tipo: cat.tipo,
+            meta_id: cat.grupo === 'investimento' ? (metaId || null) : null
         });
 
         if (typeof RegrasAprendidasModule !== 'undefined' && descricao.trim()) {
@@ -1097,8 +896,6 @@ async function handleAddTransaction(event) {
         await loadClientDashboard();
     } catch (error) {
         UIModule.showError(error.message || 'Erro ao registar transação');
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Registar'; }
     }
 }
 
@@ -1164,55 +961,21 @@ async function handleAddMeta(event) {
     const nome     = document.getElementById('metaName').value.trim();
     const valor    = parseFloat(document.getElementById('metaValue').value);
 
-    if (!nome)                { UIModule.showError('Informe o nome da meta.'); return; }
-    if (isNaN(valor) || valor < 0) { UIModule.showError('Informe um valor válido para a meta.'); return; }
-
-    const btn = event.target.querySelector('button[type="submit"]');
-    if (btn) { btn.disabled = true; btn.textContent = 'Criando...'; }
-
     try {
         await ClientModule.addGoal({ client_id: clientId, nome, valor_necessario: valor, valor_economizado: 0 });
         event.target.reset();
         UIModule.showSuccess('Meta criada!');
         await loadClientDashboard();
-    } catch (_) {
-        UIModule.showError('Erro ao criar meta');
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Criar Meta'; }
-    }
+    } catch (_) { UIModule.showError('Erro ao criar meta'); }
 }
 
 // ── PERFIL CLIENTE ──
 
-async function showClientProfile() {
+function showClientProfile() {
     const user = AuthModule.getUser();
-    UIModule.openModal('clientProfileModal');
-
-    // user_metadata.apelido/nome_completo já vêm com a sessão — só cai
-    // pra tabela `usuarios` como fallback (contas antigas sem metadado).
-    let nomeExibido = user?.email || 'Cliente';
-    const apelidoMeta = user?.user_metadata?.apelido;
-    const nomeMeta     = user?.user_metadata?.nome_completo;
-
-    if (apelidoMeta || nomeMeta) {
-        nomeExibido = apelidoMeta ? `${apelidoMeta} (${nomeMeta || ''})` : nomeMeta;
-    } else {
-        try {
-            const { data: usuario } = await supabaseClient
-                .from(CONFIG.TABLES.USUARIOS)
-                .select('nome_completo, apelido')
-                .eq('id', user.id)
-                .maybeSingle();
-            if (usuario?.apelido || usuario?.nome_completo) {
-                nomeExibido = usuario.apelido
-                    ? `${usuario.apelido} (${usuario.nome_completo || ''})`
-                    : usuario.nome_completo;
-            }
-        } catch (_) { /* mantém fallback do email */ }
-    }
-
-    UIModule.setText('profileClientName', nomeExibido.trim());
+    UIModule.setText('profileClientName', user?.user_metadata?.name || user?.email || 'Cliente');
     UIModule.setText('profileClientEmail', user?.email || '');
+    UIModule.openModal('clientProfileModal');
 }
 
 // ================================================
@@ -1498,4 +1261,4 @@ if (document.readyState === 'loading') {
     initializeApp();
 }
 
-console.log('✅ app.js (cliente) carregado — cadastro sem pedido duplicado');
+console.log('✅ app.js (cliente) carregado');

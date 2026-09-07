@@ -2,34 +2,20 @@
  * DASHBOARDS.JS — Módulo: Dashboards dos Clientes (admin.html)
  * Padrão: script global. Sem import/export.
  * Depende de: supabaseClient, allClientes, loadAllClientes,
- *             openModal, closeModal, showToast, formatCurrency,
- *             renderIdentidadeCliente (admin.js), calcularDRE/
- *             renderDRE/calcularBalancete/renderBalancete/
- *             exportarParaPDF/abrirBalanceteAmpliado (contabilidade.js
- *             — carregado ANTES deste ficheiro).
+ *             openModal, closeModal, showToast, formatCurrency
+ *             (admin.js), calcularDRE/renderDRE/calcularBalancete/
+ *             renderBalancete/exportarParaPDF/abrirBalanceteAmpliado
+ *             (contabilidade.js — carregado ANTES deste ficheiro).
  *
  * ATUALIZAÇÃO — ABAS DRE / BALANCETE NO MODAL "VER DASHBOARD":
  * O modal de dashboard de cada cliente (aberto pelo botão "📊 Ver
- * Dashboard" na grade de clientes) tem 3 abas: Resumo (KPIs +
- * gráficos + análise detalhada + insights), DRE (Demonstração do
- * Resultado) e Balancete (Balancete de Verificação).
+ * Dashboard" na grade de clientes) agora tem 3 abas: Resumo (o que já
+ * existia: KPIs + gráficos + análise detalhada, tudo INTACTO), DRE
+ * (Demonstração do Resultado) e Balancete (Balancete de Verificação).
  * `dashboardContextoAtual` guarda as transações e o nome do cliente do
  * dashboard aberto no momento — usado pelos botões de exportar PDF e
  * pelo Balancete Ampliado (contabilidade.js), evitando refazer a
  * consulta ao banco pra cada uma dessas ações.
- *
- * ATUALIZAÇÃO — PRIVACIDADE (OLHINHO): cada card de cliente na grid
- * usa renderIdentidadeCliente() (admin.js) — nome/email mascarados
- * por padrão, com botão de olho pra revelar.
- *
- * ATUALIZAÇÃO — OBSERVAÇÕES E DICAS AUTOMÁTICAS: dentro da aba
- * "Resumo", além dos KPIs/gráficos que já existiam, o sistema agora
- * gera um resumo em texto + uma lista de observações (🔴 alerta /
- * 🟡 atenção / 🟢 positivo / ℹ️ informativo) com base nos mesmos
- * números já calculados (saldo, taxa de poupança, % de cada grupo
- * sobre a renda, dívidas etc.) — ver gerarInsightsDashboard().
- * Objetivo: o admin não precisa mais interpretar os números sozinho
- * pra cada cliente — o sistema já aponta o que merece atenção.
  */
 
 let chartDonut = null;
@@ -68,7 +54,10 @@ async function renderDashboards() {
     return `
     <div class="card">
       <div class="card-header-row">
-        ${renderIdentidadeCliente(c.nome, c.email, 'dash-identity')}
+        <div>
+          <p class="card-name">${c.nome}</p>
+          <p class="card-sub">${c.email || 'Sem email'}</p>
+        </div>
         <span class="risk-badge ${risco.classe}" title="Classificação de risco financeiro">${risco.emoji} ${risco.label}</span>
       </div>
       <div class="card-actions" style="margin-top:auto;">
@@ -146,11 +135,6 @@ async function abrirDashboard(clienteId, nome) {
     if (el) el.textContent = '...';
   });
 
-  const resumoEl = document.getElementById('insights-dashboard-resumo');
-  const listaEl  = document.getElementById('insights-dashboard-lista');
-  if (resumoEl) resumoEl.textContent = '';
-  if (listaEl)  listaEl.innerHTML = '<p class="empty-state">Carregando...</p>';
-
   // Sempre volta pra aba "Resumo" ao abrir um novo cliente, e limpa o
   // conteúdo anterior de DRE/Balancete (evita mostrar por um instante
   // os números do cliente anterior enquanto a consulta nova carrega).
@@ -208,8 +192,6 @@ function calcularEExibir(transacoes) {
   const estiloDeVida = Math.max(0, totalDespesa - custoSobrevivencia - aportesInvestimento - custoDivida);
   const saldo        = totalReceita - totalDespesa;
   const taxaPoupanca  = totalReceita > 0 ? Math.max(0, (saldo / totalReceita) * 100) : 0;
-  // Versão "real" da taxa (pode ser negativa), usada nas dicas/insights
-  const taxaPoupancaReal = totalReceita > 0 ? (saldo / totalReceita) * 100 : 0;
 
   document.getElementById('kpi-sobrevivencia').textContent  = formatCurrency(custoSobrevivencia);
   document.getElementById('kpi-estilo').textContent         = formatCurrency(estiloDeVida);
@@ -228,18 +210,6 @@ function calcularEExibir(transacoes) {
   renderBarChart(topCats);
 
   renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeVida, aportesInvestimento, custoDivida, semTransferencias.length);
-
-  renderInsightsDashboard({
-    totalReceita,
-    totalDespesa,
-    custoSobrevivencia,
-    estiloDeVida,
-    aportesInvestimento,
-    custoDivida,
-    saldo,
-    taxaPoupanca: taxaPoupancaReal,
-    totalTransacoes: semTransferencias.length
-  });
 }
 
 function renderDonut(essencial, estiloVida, investimento) {
@@ -313,95 +283,6 @@ function renderAnalise(totalReceita, totalDespesa, custoSobrevivencia, estiloDeV
 }
 
 // ══════════════════════════════════════════════════════════════
-// OBSERVAÇÕES E DICAS AUTOMÁTICAS (dentro da aba "Resumo")
-// ══════════════════════════════════════════════════════════════
-/**
- * Gera um resumo em texto + uma lista de observações a partir das
- * métricas já calculadas em calcularEExibir(). Cada observação tem um
- * `tipo` (alerta/atencao/positivo/info) usado só para escolher o ícone
- * e a cor da borda na UI — nenhum julgamento é feito além do que os
- * próprios números já mostram.
- */
-function gerarInsightsDashboard(m) {
-  const itens = [];
-
-  const percEssencial     = m.totalReceita > 0 ? (m.custoSobrevivencia   / m.totalReceita) * 100 : 0;
-  const percEstiloVida    = m.totalReceita > 0 ? (m.estiloDeVida         / m.totalReceita) * 100 : 0;
-  const percInvestimento  = m.totalReceita > 0 ? (m.aportesInvestimento  / m.totalReceita) * 100 : 0;
-  const percDivida        = m.totalReceita > 0 ? (m.custoDivida          / m.totalReceita) * 100 : 0;
-
-  // Saldo / taxa de poupança
-  if (m.saldo < 0) {
-    itens.push({ tipo: 'alerta', texto: `O cliente está gastando mais do que ganha neste período (saldo de ${formatCurrency(m.saldo)}). É prioridade entender a causa antes de qualquer outra recomendação.` });
-  } else if (m.taxaPoupanca < 10) {
-    itens.push({ tipo: 'atencao', texto: `A taxa de poupança está baixa (${m.taxaPoupanca.toFixed(1)}%). O ideal é conseguir guardar pelo menos 10% a 20% da renda.` });
-  } else if (m.taxaPoupanca >= 20) {
-    itens.push({ tipo: 'positivo', texto: `Ótima taxa de poupança (${m.taxaPoupanca.toFixed(1)}%)! O cliente está conseguindo guardar uma boa parte da renda.` });
-  }
-
-  // Custo essencial
-  if (percEssencial > 50) {
-    itens.push({ tipo: 'atencao', texto: `Os gastos essenciais consomem ${percEssencial.toFixed(1)}% da renda — acima da referência de até 50%. Vale revisar moradia, contas fixas e alimentação.` });
-  }
-
-  // Estilo de vida
-  if (percEstiloVida > 30) {
-    itens.push({ tipo: 'atencao', texto: `O estilo de vida representa ${percEstiloVida.toFixed(1)}% da renda. Se a meta é acelerar investimentos, esse é o grupo com mais espaço para cortes.` });
-  }
-
-  // Investimentos
-  if (m.aportesInvestimento <= 0) {
-    itens.push({ tipo: 'alerta', texto: 'Nenhum valor foi direcionado a investimentos ou reserva de emergência neste período. Esse deveria ser o primeiro ponto de conversa com o cliente.' });
-  } else if (percInvestimento < 10) {
-    itens.push({ tipo: 'atencao', texto: `Os aportes em investimentos representam apenas ${percInvestimento.toFixed(1)}% da renda. Buscar chegar a 10%-20% traria mais segurança financeira.` });
-  } else {
-    itens.push({ tipo: 'positivo', texto: `O cliente está direcionando ${percInvestimento.toFixed(1)}% da renda a investimentos — um bom hábito a reforçar.` });
-  }
-
-  // Dívidas
-  if (m.custoDivida > 0) {
-    itens.push({
-      tipo: percDivida > 20 ? 'alerta' : 'atencao',
-      texto: `${percDivida.toFixed(1)}% da renda está comprometida com dívidas/financiamentos.` +
-             (percDivida > 20
-               ? ' Esse comprometimento está alto — priorizar a quitação pode liberar bastante espaço no orçamento.'
-               : ' Vale ficar de olho para que esse valor não cresça.')
-    });
-  }
-
-  // Volume de dados
-  if (m.totalTransacoes < 5) {
-    itens.push({ tipo: 'info', texto: `Poucas transações registradas neste histórico (${m.totalTransacoes}). A análise fica mais precisa conforme o cliente for lançando mais dados.` });
-  }
-
-  const resumo = m.saldo >= 0
-    ? `Neste período, o cliente recebeu ${formatCurrency(m.totalReceita)} e gastou ${formatCurrency(m.totalDespesa)}, ficando com um saldo positivo de ${formatCurrency(m.saldo)} (taxa de poupança de ${m.taxaPoupanca.toFixed(1)}%).`
-    : `Neste período, o cliente recebeu ${formatCurrency(m.totalReceita)} e gastou ${formatCurrency(m.totalDespesa)}, resultando em um saldo negativo de ${formatCurrency(Math.abs(m.saldo))}.`;
-
-  return { resumo, itens };
-}
-
-function renderInsightsDashboard(m) {
-  const container = document.getElementById('insights-dashboard-lista');
-  const resumoEl   = document.getElementById('insights-dashboard-resumo');
-  if (!container || !resumoEl) return;
-
-  const { resumo, itens } = gerarInsightsDashboard(m);
-  resumoEl.textContent = resumo;
-
-  const ICONE = { alerta: '🔴', atencao: '🟡', positivo: '🟢', info: 'ℹ️' };
-
-  container.innerHTML = itens.length
-    ? itens.map(item => `
-        <div class="insight-item insight-item--${item.tipo}">
-          <span class="insight-item__icone">${ICONE[item.tipo] || 'ℹ️'}</span>
-          <span class="insight-item__texto">${item.texto}</span>
-        </div>
-      `).join('')
-    : '<p class="empty-state">Sem observações específicas para este período.</p>';
-}
-
-// ══════════════════════════════════════════════════════════════
 // ABAS DO MODAL "VER DASHBOARD" — Resumo / DRE / Balancete
 // ══════════════════════════════════════════════════════════════
 
@@ -459,4 +340,4 @@ function initModalDashboardTabs() {
   });
 }
 
-console.log('✅ dashboards.js carregado (Resumo + Insights + DRE + Balancete)');
+console.log('✅ dashboards.js carregado (Resumo + DRE + Balancete)');

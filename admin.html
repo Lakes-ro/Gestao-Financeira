@@ -3,16 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MentorFin — Admin</title>
+  <title>Gestor Financeiro Pro — Admin</title>
   <link rel="stylesheet" href="admin.css" />
-    <!-- ══ PWA — instalação como app (Admin) ═══════════════════ -->
-    <link rel="manifest" href="manifest.json">
-    <meta name="application-name"                content="MentorFin Admin">
-    <meta name="apple-mobile-web-app-capable"    content="yes">
-    <meta name="apple-mobile-web-app-title"      content="MentorFin">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="mobile-web-app-capable"          content="yes">
-    <meta name="theme-color"                     content="#00f5a0">
 </head>
 <body class="app-body">
 
@@ -59,27 +51,6 @@
       <div>
         <h1 class="panel-title">👤 Painel do Administrador</h1>
         <p class="panel-subtitle" id="admin-subtitle">Carregando...</p>
-      </div>
-
-      <!-- Central de Notificações — ver notificacoes-admin.js.
-           Avisa automaticamente sobre: novo cliente cadastrado,
-           cliente criou categoria própria, e risco financeiro do
-           cliente mudou pra amarelo/vermelho (gerado via triggers
-           no banco, ver MIGRACAO-notificacoes-admin.sql). -->
-      <div class="notif-bell-wrapper">
-        <button type="button" id="btn-notificacoes" class="btn-notif-bell" title="Notificações">
-          🔔
-          <span id="notif-badge" class="notif-badge hidden">0</span>
-        </button>
-        <div id="notif-painel" class="notif-painel hidden">
-          <div class="notif-painel__header">
-            <h4>Notificações</h4>
-            <button type="button" id="btn-marcar-todas-lidas" class="notif-marcar-lidas">Marcar todas como lidas</button>
-          </div>
-          <div id="notif-lista" class="notif-lista">
-            <p class="empty-state">Carregando...</p>
-          </div>
-        </div>
       </div>
     </header>
 
@@ -543,15 +514,6 @@
             <h4>📊 ANÁLISE DETALHADA</h4>
             <div class="analise-grid" id="analise-grid"></div>
           </div>
-
-          <!-- Observações e dicas geradas automaticamente com base nos
-               números acima — ver gerarInsightsDashboard() em
-               dashboards.js. -->
-          <div class="insights-section">
-            <h4>💡 Observações e Dicas</h4>
-            <p class="insights-resumo" id="insights-dashboard-resumo"></p>
-            <div class="insights-list" id="insights-dashboard-lista"></div>
-          </div>
         </div>
 
         <!-- ABA: DRE (Demonstração do Resultado) -->
@@ -660,15 +622,13 @@
 
   <!-- Modal: Criar/Editar Planejamento -->
   <div id="modal-planejamento" class="modal-overlay hidden">
-    <div class="modal modal-wide">
+    <div class="modal">
       <div class="modal-header">
         <h3 id="modal-planejamento-title">📋 Criar Planejamento</h3>
         <button class="modal-close" data-modal="modal-planejamento">✕</button>
       </div>
       <div class="modal-body">
         <input type="hidden" id="planejamento-id" />
-
-        <!-- Resumo financeiro rápido -->
         <div class="planejamento-summary">
           <div class="summary-item">
             <span class="summary-label">Renda Ativa</span>
@@ -686,50 +646,7 @@
             <span class="summary-label">Despesa Total</span>
             <span class="summary-value red" id="plan-despesa-total">R$ 0,00</span>
           </div>
-          <div class="summary-item">
-            <span class="summary-label">Saldo</span>
-            <span class="summary-value green" id="plan-saldo">R$ 0,00</span>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">Taxa de Poupança</span>
-            <span class="summary-value" id="plan-taxa-poupanca">0%</span>
-          </div>
         </div>
-
-        <!-- Distribuição do orçamento por grupo -->
-        <div class="analise-section">
-          <h4>📊 Distribuição do Orçamento</h4>
-          <div class="analise-grid">
-            <div class="analise-item">
-              <span class="analise-item-label">Custo Essencial</span>
-              <span class="analise-item-value" id="plan-custo-essencial">R$ 0,00</span>
-            </div>
-            <div class="analise-item">
-              <span class="analise-item-label">Estilo de Vida</span>
-              <span class="analise-item-value" id="plan-estilo-vida">R$ 0,00</span>
-            </div>
-            <div class="analise-item">
-              <span class="analise-item-label">Investimentos</span>
-              <span class="analise-item-value" id="plan-investimentos-valor">R$ 0,00</span>
-            </div>
-            <div class="analise-item">
-              <span class="analise-item-label">Dívidas</span>
-              <span class="analise-item-value" id="plan-dividas-valor">R$ 0,00</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Orientações automáticas — geradas por
-             gerarAnaliseDetalhadaPlanejamento() em planejamentos.js.
-             Escondido quando não há cliente/dados ainda. -->
-        <div id="planejamento-analise-bloco" class="planejamento-analise-box hidden">
-          <div class="planejamento-analise-box__header">
-            <h4>💡 Orientações Sugeridas (geradas automaticamente)</h4>
-            <button type="button" class="btn-secondary" onclick="inserirAnaliseNasRecomendacoes()">📋 Usar como base nas Recomendações</button>
-          </div>
-          <pre id="planejamento-analise-texto" class="planejamento-analise-box__texto"></pre>
-        </div>
-
         <div class="form-group">
           <label>Cliente</label>
           <select id="planejamento-cliente-select"></select>
@@ -740,7 +657,7 @@
         </div>
         <div class="form-group">
           <label>Recomendações</label>
-          <textarea id="planejamento-recomendacoes" rows="7" placeholder="Com base na sua renda..."></textarea>
+          <textarea id="planejamento-recomendacoes" rows="5" placeholder="Com base na sua renda..."></textarea>
         </div>
         <div class="form-group">
           <label>Detalhes Adicionais</label>
@@ -765,9 +682,6 @@
         <div id="comentarios-list" class="comentarios-list"></div>
         <div class="form-group" style="margin-top:1rem;">
           <label>Novo comentário</label>
-          <div id="comentario-edicao-aviso" class="comentario-edicao-aviso hidden">
-            ✏️ Editando comentário — <a href="#" onclick="cancelarEdicaoComentario(); return false;">cancelar edição</a>
-          </div>
           <textarea id="novo-comentario" rows="3" placeholder="Escreva um comentário sobre o cliente..."></textarea>
         </div>
       </div>
@@ -799,7 +713,6 @@
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5/papaparse.min.js"></script>
   <script src="config.js"></script>
   <script src="admin.js"></script>
-  <script src="notificacoes-admin.js"></script>
   <script src="contabilidade.js"></script>
   <script src="categorias.js"></script>
   <script src="clientes.js"></script>

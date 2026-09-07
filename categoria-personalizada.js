@@ -32,24 +32,6 @@
  * "Aluguel Ganho" cobrindo esse termo). Isso é só um AVISO — o cliente
  * continua com controle total e pode confirmar e criar a categoria
  * nova mesmo assim, se preferir.
- *
- * ATUALIZAÇÃO — DOAÇÕES / CONTRIBUIÇÕES RELIGIOSAS:
- * Adicionada regra específica para dízimo, ofertas e contribuições
- * religiosas. A regra está posicionada ANTES de qualquer padrão genérico
- * de "estilo de vida" para que o grupo correto seja atribuído quando o
- * cliente criar uma categoria desse tipo (ex: "Dízimo da Igreja",
- * "Oferta", "Contribuição Religiosa"). O grupo atribuído é
- * 'estilo_de_vida', que já existe no enum do banco — sem precisar de
- * nenhuma migração adicional.
- *
- * ATUALIZAÇÃO — REEMBOLSO / ESTORNO RECEBIDO:
- * Adicionada regra de transferência interna para reembolsos e estornos.
- * Reembolso é a devolução de uma despesa já contabilizada — classificá-lo
- * como receita inflaria totalReceitas e distorceria taxa de poupança e
- * DRE. A regra fica ANTES da de dízimo/doação para que "reembolso de
- * doação" não caia na categoria de doação. O grupo atribuído é
- * 'transferencia' (tipo 'receita'), idêntico ao comportamento de
- * preClassificarTransacao() em importacao-extrato.js.
  */
 
 const REGRAS_CLASSIFICACAO_CATEGORIA = [
@@ -75,29 +57,6 @@ const REGRAS_CLASSIFICACAO_CATEGORIA = [
     [/farm[aá]cia|m[eé]dico|consulta|plano de sa[uú]de|hospital/i, 'essencial',      'despesa'],
     [/escola|faculdade|curso|mensalidade/i,                        'essencial',      'despesa'],
     [/[oô]nibus|uber|99|combust[ií]vel|gasolina|transporte/i,      'essencial',      'despesa'],
-
-    // ── NOVO: Reembolso / Estorno Recebido ───────────────────────
-    // grupo: 'transferencia', tipo: 'receita' — não conta em
-    // totalReceitas. Reembolso é devolução de despesa já contabilizada;
-    // somá-lo como receita inflaria os totais e distorceria o DRE.
-    // Posicionado ANTES de dízimo/doação para que "reembolso de doação"
-    // bata aqui e não na categoria de doação religiosa abaixo.
-    [/reembolso|estorno\s+recebido|devolu[çc][aã]o\s+recebida|ressarcimento|chargeback/i,
-                                                                       'transferencia',  'receita'],
-    // ─────────────────────────────────────────────────────────────
-
-    // ── NOVO: Doações / Contribuições Religiosas ──────────────────
-    // Posicionada ANTES das regras genéricas de "estilo de vida" para
-    // que "dízimo", "oferta da igreja" etc. não caiam em outra
-    // categoria por coincidência de substring (ex: "oferta" genérica).
-    // `find()` retorna o PRIMEIRO match — a ordem aqui é deliberada.
-    //
-    // Termos cobertos: dízimo · dizimo · oferta da/religiosa/missionária ·
-    // contribuição religiosa/da igreja · doação para a igreja ·
-    // primícia · primicias
-    [/d[íi]zimo|oferta\s+(?:da\s+)?(?:igreja|religi[oó]sa|missionár[ia])|contribui[çc][aã]o\s+religi[oó]sa|contribui[çc][aã]o\s+da\s+igreja|doa[çc][aã]o\s+(?:para\s+(?:a\s+)?)?(?:igreja)|prim[íi]ci[ao]\b/i,
-                                                                       'estilo_de_vida', 'despesa'],
-    // ─────────────────────────────────────────────────────────────
 
     // Estilo de vida (consumo não essencial)
     [/streaming|netflix|spotify|assinatura/i,                      'estilo_de_vida', 'despesa'],
